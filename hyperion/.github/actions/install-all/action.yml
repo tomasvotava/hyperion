@@ -1,0 +1,26 @@
+name: Install all requiremenst
+description: Install all Hyperion requirements
+inputs:
+  python-version:
+    description: "Python version to use"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/setup-python@v5
+      name: Install python "${{inputs.python-version}}"
+      with:
+        python-version: "${{inputs.python-version}}"
+    - name: Install pipx
+      run: python -m pip install pipx && python -m pipx ensurepath
+      shell: bash
+    - name: Install poetry
+      run: pipx install poetry && poetry --version version
+      shell: bash
+    - name: Install pre-commit
+      run: pipx install pre-commit
+      shell: bash
+    - name: Install individual projects
+      run: poetry install
+      shell: bash
