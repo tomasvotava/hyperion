@@ -1,9 +1,11 @@
 import datetime
 import json
 from dataclasses import dataclass, field
-from typing import ClassVar, Protocol
+from typing import ClassVar, Literal, Protocol
 
 from hyperion.dateutils import TimeResolution, assure_timezone
+
+AssetType = Literal["data_lake", "feature", "persistent_store"]
 
 
 def _get_prefixed_path(path: str, prefix: str = "") -> str:
@@ -14,7 +16,7 @@ def _get_prefixed_path(path: str, prefix: str = "") -> str:
 
 
 class AssetProtocol(Protocol):
-    asset_type: ClassVar[str]
+    asset_type: ClassVar[AssetType]
 
     @property
     def name(self) -> str: ...
@@ -29,7 +31,7 @@ class AssetProtocol(Protocol):
 
 @dataclass(frozen=True, eq=True)
 class DataLakeAsset:
-    asset_type: ClassVar[str] = "data_lake"
+    asset_type: ClassVar[AssetType] = "data_lake"
     name: str
     date: datetime.datetime
     schema_version: int = 1
@@ -47,7 +49,7 @@ class DataLakeAsset:
 
 @dataclass(frozen=True, eq=True)
 class PersistentStoreAsset:
-    asset_type: ClassVar[str] = "persistent_store"
+    asset_type: ClassVar[AssetType] = "persistent_store"
     name: str
     schema_version: int = 1
 
@@ -63,7 +65,7 @@ class PersistentStoreAsset:
 
 @dataclass(frozen=True, eq=True)
 class FeatureAsset:
-    asset_type: ClassVar[str] = "feature"
+    asset_type: ClassVar[AssetType] = "feature"
     name: str
     timestamp: datetime.datetime
     resolution: TimeResolution | str

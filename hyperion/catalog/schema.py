@@ -4,19 +4,17 @@ import abc
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, ClassVar, Literal, cast
+from typing import Any, ClassVar, cast
 from urllib.parse import urlparse
 
 from hyperion.config import storage_config
-from hyperion.entities.catalog import AssetProtocol
+from hyperion.entities.catalog import AssetProtocol, AssetType
 from hyperion.infrastructure.aws import S3Client
 from hyperion.logging import get_logger
 
 logger = get_logger("schema-store")
 
 AVRO_SCHEMAS_PATH = Path(__file__).parent / "avro_schemas"
-
-AssetType = Literal["data_lake", "feature", "persistent_store"]
 
 
 class SchemaStore(abc.ABC):
