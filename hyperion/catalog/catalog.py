@@ -11,6 +11,7 @@ import fastavro
 import fastavro.validation
 import fastavro.write
 
+from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
 from hyperion.entities.catalog import AssetProtocol, DataLakeAsset, FeatureAsset, PersistentStoreAsset
 from hyperion.infrastructure.aws import S3Client
@@ -120,8 +121,9 @@ class WritablePersistentStore(PersistentStore):
     # https://github.com/Zephyr-Trade/FVE-map/issues/9
     def store(self, data: Iterable[dict[str, Any]]) -> None:
         with tempfile.TemporaryFile("+wb") as file:
-            logger.info("Pouring perstistent store asset into temporary file.", asset=self.asset, path=file.name)
-            _write_avro(file, self.asset.get_schema(), data, self.asset.to_metadata())
+            logger.info("Pouring persistent store asset into temporary file.", asset=self.asset, path=file.name)
+            schema = SchemaStore.from_config().get_asset_schema(self.asset)
+            _write_avro(file, schema, data, self.asset.to_metadata())
             s3_client = S3Client()
             s3_client.upload(file, self.persistent_store_bucket, self.asset.get_path(self.persistent_store_prefix))
 
@@ -190,7 +192,7 @@ class Catalog:
         store_config = self._get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with tempfile.NamedTemporaryFile("+wb") as file:
-            schema = asset.get_schema()
+            schema = SchemaStore.from_config().get_asset_schema(asset)
             path = Path(file.name)
             logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
             _write_avro(file, schema, data, asset.to_metadata())

@@ -8,6 +8,7 @@ from typing import Any, ClassVar, Literal, cast
 from urllib.parse import urlparse
 
 from hyperion.config import storage_config
+from hyperion.entities.catalog import AssetProtocol
 from hyperion.infrastructure.aws import S3Client
 from hyperion.logging import get_logger
 
@@ -23,6 +24,9 @@ class SchemaStore(abc.ABC):
 
     def __init__(self, path: str) -> None:
         self.path = path
+
+    def get_asset_schema(self, asset: AssetProtocol) -> dict[str, Any]:
+        return self.get_schema(asset.name, asset.schema_version, asset_type=asset.asset_type)
 
     @abc.abstractmethod
     def get_schema(self, asset_name: str, schema_version: int, asset_type: AssetType) -> dict[str, Any]:
