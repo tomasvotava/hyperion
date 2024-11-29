@@ -42,6 +42,14 @@ class QueueConfig(EnvConfig):
     url: str | None = Field(description="The URL of the SQS queue.", default=None)
 
 
+class SecretsConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="HYPERION_SECRETS")
+
+    backend: str | None = Field(
+        description="The backend to use for secrets management. Can only be `AWSSecretsManager` or None.", default=None
+    )
+
+
 class GeoConfig(EnvConfig):
     env_proxy = EnvProxy(prefix="HYPERION_GEO")
 
@@ -52,3 +60,4 @@ config = CommonConfig()
 storage_config = StorageConfig()
 geo_config = GeoConfig()
 queue_config = QueueConfig()
+secrets_config = SecretsConfig()
