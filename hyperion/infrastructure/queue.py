@@ -83,5 +83,8 @@ class SQSQueue(Queue):
             },
         )
 
+    def delete(self, receipt_handle: str) -> None:
+        self._client.delete_message(QueueUrl=self._queue_url, ReceiptHandle=receipt_handle)
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} {self._queue_url}>"
