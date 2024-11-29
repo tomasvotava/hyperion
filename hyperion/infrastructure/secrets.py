@@ -14,7 +14,7 @@ SECRET_PATTERN = re.compile(r"!#secret:#(?P<secret_name>.+)")
 
 
 class SecretsManager(abc.ABC):
-    _instance: "SecretsManager" | None = None
+    _instance: "SecretsManager | None" = None
 
     @staticmethod
     def _create_new() -> "SecretsManager":
