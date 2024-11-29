@@ -52,6 +52,10 @@ class Queue(abc.ABC):
     def send(self, message: Message) -> None:
         """Send a message to the queue."""
 
+    @abc.abstractmethod
+    def delete(self, receipt_handle: str) -> None:
+        """Delete a message from the queue."""
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__}>"
 
@@ -63,6 +67,13 @@ class InMemoryQueue(Queue):
 
     def send(self, message: Message) -> None:
         self._messages.append(message)
+
+    def delete(self, receipt_handle: str) -> None:
+        """Delete the message using the created as isoformat."""
+        for message in self._messages:
+            if message.created.isoformat() == receipt_handle:
+                self._messages.remove(message)
+                break
 
 
 class SQSQueue(Queue):
