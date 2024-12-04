@@ -1,8 +1,10 @@
 import abc
 import datetime
+from collections.abc import Iterator
 from enum import Enum
 from typing import ClassVar
 
+from aws_lambda_typing.events import SQSEvent
 from boto3 import client
 
 # After a long consideration, I decided to use pydantic to serialize / deserialize the messages.
@@ -27,16 +29,39 @@ class Message(BaseModel):
         cls._subclasses[cls.__name__] = cls
 
     @staticmethod
-    def deserialize(json_str: str, message_type: str) -> "Message":
-        return Message._subclasses[message_type].model_validate_json(json_str)
+    def deserialize(json_str: str, message_type: str, receipt_handle: str | None = None) -> "Message":
+        msg = Message._subclasses[message_type].model_validate_json(json_str)
+        if receipt_handle and not msg.receipt_handle:
+            msg.receipt_handle = receipt_handle
+        return msg
 
     created: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(tz=datetime.timezone.utc))
     sender: str = config.service_name
+    receipt_handle: str | None = None
 
 
 class DataLakeArrivalMessage(Message):
     asset: DataLakeAsset
     event: ArrivalEvent
+
+
+class SourceBackfillMessage(Message):
+    source: str
+    dates: list[datetime.datetime]
+    notify: bool = True
+
+
+def iter_messages_from_sqs_event(event: SQSEvent) -> Iterator[Message]:
+    if not isinstance(event, dict) or "Records" not in event or not isinstance(event["Records"], list):
+        raise ValueError("Provided event is not a valid SQS Event.")
+    for record in event["Records"]:
+        logger.info("Deserializing message.", message_id=record["messageId"])
+        if "MessageType" not in record["messageAttributes"]:
+            logger.warning("Message has no type and probably does not come from Hyperion.", message=record)
+            continue
+        message_type = record["messageAttributes"]["MessageType"]["stringValue"]
+        logger.debug("Attempting to deserialize message.", message=record, type=message_type)
+        yield Message.deserialize(record["body"], message_type, record["receiptHandle"])
 
 
 class Queue(abc.ABC):
