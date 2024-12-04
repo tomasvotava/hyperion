@@ -40,7 +40,7 @@ class Source(abc.ABC):
     async def _run(cls, catalog: Catalog, notify: bool = True, dates: list[datetime.datetime] | None = None) -> None:
         source = cls(catalog)
         for asset in await source.run(dates):
-            logger.info("Processing asset retrieved from source.", asset=asset)
+            logger.info("Processing asset retrieved from source.", asset=asset.asset)
             source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
 
     @classmethod
