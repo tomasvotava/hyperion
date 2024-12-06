@@ -26,6 +26,13 @@ class SourceAsset:
     data: Iterable[dict[str, Any]]
 
 
+async def aiter_dates(dates: list[datetime.datetime] | None) -> AsyncIterator[datetime.datetime]:
+    dates = dates or [datetime.datetime.now(tz=datetime.timezone.utc)]
+    for date in dates:
+        yield date
+        await asyncio.sleep(0)
+
+
 class Source(abc.ABC):
     source: ClassVar[str] = "base"
 
