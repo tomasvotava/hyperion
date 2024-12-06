@@ -3,7 +3,7 @@
 import abc
 import asyncio
 import datetime
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Awaitable, Iterable
 from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
@@ -33,18 +33,26 @@ class Source(abc.ABC):
         self.catalog = catalog
 
     @abc.abstractmethod
-    async def run(self, dates: list[datetime.datetime] | None = None) -> Iterable[SourceAsset]:
+    def run(
+        self, dates: list[datetime.datetime] | None = None
+    ) -> Awaitable[Iterable[SourceAsset]] | AsyncIterator[SourceAsset]:
         """The main coroutine that runs the source extraction."""
 
     @classmethod
     async def _run(cls, catalog: Catalog, notify: bool = True, dates: list[datetime.datetime] | None = None) -> None:
         source = cls(catalog)
-        for asset in await source.run(dates):
-            logger.info("Processing asset retrieved from source.", asset=asset.asset)
-            source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
+        result = source.run(dates)
+        if isinstance(result, AsyncIterator):
+            async for asset in result:
+                logger.info("Processing asset retrieved from source.", asset=asset.asset)
+                source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
+        else:
+            for asset in await result:
+                logger.info("Processing asset retrieved from source.", asset=asset.asset)
+                source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
 
     @classmethod
-    def main(
+    def handle_aws_lambda_event(
         cls,
         event: SourceEventType | None = None,
         context: Context | None = None,
