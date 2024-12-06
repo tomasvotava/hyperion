@@ -34,9 +34,11 @@ async def aiter_dates(dates: list[datetime.datetime] | None) -> AsyncIterator[da
 
 
 class Source(abc.ABC):
-    source: ClassVar[str] = "base"
+    source: ClassVar[str] = NotImplemented
 
     def __init__(self, catalog: Catalog) -> None:
+        if self.source is NotImplemented:
+            raise NotImplementedError("Cannot instantiate a source without a source name.")
         self.catalog = catalog
 
     @abc.abstractmethod
