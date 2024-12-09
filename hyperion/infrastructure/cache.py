@@ -43,10 +43,14 @@ class Cache(ABC):
         instance_key = (storage_config.cache_key_prefix, True)
         if instance_key not in Cache._instances:
             if storage_config.cache_dynamodb_table:
+                logger.info("Using DynamoDB Cache.")
                 cls._instances[instance_key] = DynamoDBCache(
-                    prefix=storage_config.cache_key_prefix, default_ttl=storage_config.cache_dynamodb_default_ttl
+                    prefix=storage_config.cache_key_prefix,
+                    default_ttl=storage_config.cache_dynamodb_default_ttl,
+                    table_name=storage_config.cache_dynamodb_table,
                 )
             else:
+                logger.info("Using InMemory Cache.")
                 cls._instances[instance_key] = InMemoryCache(
                     prefix=storage_config.cache_key_prefix, default_ttl=storage_config.cache_dynamodb_default_ttl
                 )
