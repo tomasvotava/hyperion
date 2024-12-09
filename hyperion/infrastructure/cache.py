@@ -222,7 +222,7 @@ class DynamoDBCache(Cache):
         cache_key = self._key(key)
         response = self.table.get_item(Key={"key": cache_key})
         item = response.get("Item")
-        if item and int(item.get(self.TTL_ATTRIBUTE_NAME, 0)) > int(time.time()):  # Check if not expired
+        if item:
             return self._decompress(bytes(item["value"]))
         return None
 
