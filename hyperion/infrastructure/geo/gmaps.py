@@ -3,7 +3,7 @@
 import json
 from contextlib import ExitStack
 from dataclasses import asdict
-from typing import Any
+from typing import Any, ClassVar
 
 import googlemaps
 
@@ -19,15 +19,18 @@ cache_asset = PersistentStoreAsset("GEOCodeCache", schema_version=1)
 
 
 class GoogleMaps:
-    geocode_cache = PersistentCache("gmaps", hash_keys=False, asset=cache_asset)
+    _instance: ClassVar["GoogleMaps | None"] = None
 
-    @staticmethod
-    def from_config() -> "GoogleMaps":
-        if geo_config.gmaps_api_key is None:
-            raise ValueError("Google Maps API key is not set.")
-        return GoogleMaps(api_key=geo_config.gmaps_api_key)
+    @classmethod
+    def from_config(cls) -> "GoogleMaps":
+        if cls._instance is None:
+            if geo_config.gmaps_api_key is None:
+                raise ValueError("Google Maps API key is not set.")
+            cls._instance = GoogleMaps(api_key=geo_config.gmaps_api_key)
+        return cls._instance
 
     def __init__(self, api_key: str) -> None:
+        self.geocode_cache = PersistentCache("gmaps", hash_keys=False, asset=cache_asset)
         self.client = googlemaps.Client(key=api_key)
         self._cache_context: ExitStack | None = None
 
