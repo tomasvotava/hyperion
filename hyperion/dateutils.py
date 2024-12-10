@@ -116,11 +116,11 @@ def quantize_datetime(base: datetime.datetime, resolution: TimeResolution | str)
     raise ValueError(f"Unsupported resolution unit {resolution.unit!r} for quantization.")  # pragma: no cover
 
 
-def assure_timezone(
-    base: datetime.datetime, default_tz: datetime.timezone = datetime.timezone.utc
-) -> datetime.datetime:
+def assure_timezone(base: datetime.datetime, tz: datetime.timezone = datetime.timezone.utc) -> datetime.datetime:
     """Assure datetime has a datetime and return it timezone-aware if not."""
     if base.tzinfo is not None:
-        return base
-    logger.warning(f"A timezone-unaware timestamp was given, assuming {default_tz!r}.")
-    return base.replace(tzinfo=default_tz)
+        if base.tzinfo == tz:
+            return base
+        return base.astimezone(tz)
+    logger.warning(f"A timezone-unaware timestamp was given, assuming {tz!r}.")
+    return base.replace(tzinfo=tz)
