@@ -59,7 +59,9 @@ def truncate_datetime(base: datetime.datetime, unit: TimeResolutionUnit) -> date
 
 
 def iter_dates_between(
-    start_date: datetime.datetime, end_date: datetime.datetime, granularity: TimeResolutionUnit
+    start_date: datetime.datetime | datetime.date,
+    end_date: datetime.datetime | datetime.date,
+    granularity: TimeResolutionUnit,
 ) -> Iterator[datetime.datetime]:
     """
     Iterate over datetimes between start_date and end_date with steps based on the given granularity.
