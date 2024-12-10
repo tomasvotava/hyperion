@@ -1,5 +1,6 @@
 """The data catalog."""
 
+import datetime
 import tempfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -13,6 +14,7 @@ import fastavro.write
 
 from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
+from hyperion.dateutils import TimeResolutionUnit, truncate_datetime
 from hyperion.entities.catalog import AssetProtocol, DataLakeAsset, FeatureAsset, PersistentStoreAsset
 from hyperion.infrastructure.aws import S3Client
 from hyperion.infrastructure.queue import ArrivalEvent, DataLakeArrivalMessage, Queue
@@ -271,3 +273,76 @@ class Catalog:
     def retrieve_feature(self, asset: FeatureAsset) -> Iterator[dict[str, Any]]:
         """Retrieve a feature store data."""
         return self._retrieve_asset(asset)
+
+    def reparition(
+        self, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
+    ) -> None:
+        repartitioner = AssetRepartitioner(self, asset, granularity, date_attribute)
+        repartitioner.repartition()
+
+
+class AssetRepartitioner:
+    def __init__(
+        self, catalog: Catalog, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
+    ) -> None:
+        self.catalog = catalog
+        self.asset = asset
+        self.granularity = granularity
+        self.date_attribute = date_attribute
+
+        self._state: dict[datetime.datetime, tuple[IO[bytes], DataLakeAsset, fastavro.write.Writer]] = {}
+
+    def __enter__(self) -> None:
+        self._state = {}
+
+    def __exit__(self, *args: Any) -> None:
+        for file, _, __ in self._state.values():
+            logger.info("Closing temporary file.", path=file.name)
+            file.close()
+
+    def _get_handler(self, partition_date: datetime.datetime) -> tuple[IO[bytes], DataLakeAsset, fastavro.write.Writer]:
+        if partition_date in self._state:
+            return self._state[partition_date]
+        logger.info("Creating a new handler for partition date.", partition_date=partition_date.isoformat())
+        file = tempfile.NamedTemporaryFile("+wb")  # noqa: SIM115
+        logger.info(f"Partition will be temporarily stored in {file.name!r}.", path=file.name)
+        asset = DataLakeAsset(self.asset.name, partition_date, self.asset.schema_version)
+        writer = fastavro.write.Writer(
+            file,
+            schema=SchemaStore.from_config().get_asset_schema(asset),
+            codec="deflate",
+            validator=True,
+            metadata=asset.to_metadata(),
+        )
+        handler = (file, asset, writer)
+        self._state[partition_date] = handler
+        return handler
+
+    def repartition(self) -> None:
+        data = self.catalog.retrieve_data_lake_asset(self.asset)
+        with self:
+            for record in data:
+                timestamp = record.get(self.date_attribute)
+                if not isinstance(timestamp, datetime.datetime):
+                    raise ValueError(
+                        f"Asset {self.asset!r} cannot be repartitioned using date attribute "
+                        f"{self.date_attribute!r} - it is not a valid datetime."
+                    )
+                partition_date = truncate_datetime(timestamp, self.granularity)
+                _, __, writer = self._get_handler(partition_date)
+                writer.write(record)
+            store_config = self.catalog._get_store_config(self.asset)
+            logger.info("Finished creating partitioned avro files.")
+            for file, asset, writer in self._state.values():
+                logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
+                writer.dump()
+                file.seek(0)
+                self.catalog.s3_client.upload(
+                    file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
+                )
+
+
+if __name__ == "__main__":
+    catalog = Catalog.from_config()
+    asset = DataLakeAsset("WeatherHistory", datetime.datetime(2024, 12, 9, tzinfo=datetime.timezone.utc))
+    catalog.reparition(asset, "M")
