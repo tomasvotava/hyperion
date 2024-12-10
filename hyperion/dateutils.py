@@ -1,5 +1,6 @@
 import datetime
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
@@ -55,6 +56,53 @@ def truncate_datetime(base: datetime.datetime, unit: TimeResolutionUnit) -> date
         case "y":
             return base.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     raise ValueError(f"Unknown time unit {unit!r}. Pick one of {', '.join(TIME_UNITS)}")
+
+
+def iter_dates_between(
+    start_date: datetime.datetime, end_date: datetime.datetime, granularity: TimeResolutionUnit
+) -> Iterator[datetime.datetime]:
+    """
+    Iterate over datetimes between start_date and end_date with steps based on the given granularity.
+    Includes the start_date and may include end_date (if end date is reachable from start date with given granularity).
+
+    :param start_date: The starting datetime.
+    :param end_date: The ending datetime.
+    :param granularity: The granularity for steps (e.g., "d" for days, "M" for months).
+    :return: An iterator of datetime objects.
+    """
+    start_date = assure_timezone(start_date)
+    end_date = assure_timezone(end_date)
+    logger.debug(
+        "Generating dates between two points.", start_date=start_date.isoformat(), end_date=end_date.isoformat()
+    )
+    if start_date > end_date:
+        raise ValueError("Start date cannot be later than end date.")
+
+    current = start_date
+
+    delta: datetime.timedelta | relativedelta
+
+    match granularity:
+        case "s":
+            delta = datetime.timedelta(seconds=1)
+        case "m":
+            delta = datetime.timedelta(minutes=1)
+        case "h":
+            delta = datetime.timedelta(hours=1)
+        case "d":
+            delta = datetime.timedelta(days=1)
+        case "w":
+            delta = datetime.timedelta(weeks=1)
+        case "M":
+            delta = relativedelta(months=1)
+        case "y":
+            delta = relativedelta(years=1)
+        case default:
+            raise ValueError(f"Unsupported granularity {default!r}.")
+
+    while current <= end_date:
+        yield current
+        current += delta
 
 
 def quantize_datetime(base: datetime.datetime, resolution: TimeResolution | str) -> datetime.datetime:

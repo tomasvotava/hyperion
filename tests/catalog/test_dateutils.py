@@ -3,7 +3,13 @@ from typing import Any
 
 import pytest
 
-from hyperion.dateutils import TimeResolution, TimeResolutionUnit, quantize_datetime, truncate_datetime
+from hyperion.dateutils import (
+    TimeResolution,
+    TimeResolutionUnit,
+    iter_dates_between,
+    quantize_datetime,
+    truncate_datetime,
+)
 
 
 def utc_datetime(*args: Any, **kwargs: Any) -> datetime.datetime:
@@ -147,3 +153,53 @@ def test_quantize_datetime_with_timeresolution(
 def test_quantize_datetime_invalid_resolution(base: datetime.datetime, resolution: str, error: str) -> None:
     with pytest.raises(ValueError, match=error):
         quantize_datetime(base, resolution)
+
+
+@pytest.mark.parametrize(
+    ("start_date", "end_date", "granularity", "expected"),
+    [
+        (
+            datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2024, 1, 10, tzinfo=datetime.timezone.utc),
+            "d",
+            [datetime.datetime(2024, 1, d, tzinfo=datetime.timezone.utc) for d in range(1, 11)],
+        ),
+        (
+            datetime.datetime(2024, 1, 1, 10, 12, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2024, 1, 10, 10, 12, tzinfo=datetime.timezone.utc),
+            "d",
+            [datetime.datetime(2024, 1, d, 10, 12, tzinfo=datetime.timezone.utc) for d in range(1, 11)],
+        ),
+        (
+            datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2024, 5, 10, tzinfo=datetime.timezone.utc),
+            "M",
+            [
+                datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 2, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 3, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 4, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 5, 1, tzinfo=datetime.timezone.utc),
+            ],
+        ),
+        (
+            datetime.datetime(2024, 10, 11, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2025, 3, 5, tzinfo=datetime.timezone.utc),
+            "M",
+            [
+                datetime.datetime(2024, 10, 11, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 11, 11, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2024, 12, 11, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2025, 1, 11, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2025, 2, 11, tzinfo=datetime.timezone.utc),
+            ],
+        ),
+    ],
+)
+def test_iter_datetimes_between(
+    start_date: datetime.datetime,
+    end_date: datetime.datetime,
+    granularity: TimeResolutionUnit,
+    expected: list[datetime.datetime],
+) -> None:
+    assert list(iter_dates_between(start_date, end_date, granularity)) == expected
