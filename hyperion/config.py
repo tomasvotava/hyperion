@@ -33,6 +33,10 @@ class StorageConfig(EnvConfig):
     cache_dynamodb_default_ttl: int = Field(
         default=60, description="Default TTL for key-value cache in DynamoDB (in seconds)."
     )
+
+    cache_local_path: str | None = Field(
+        description="Path to a directory where cache is going to be stored to.", default=None
+    )
     cache_key_prefix: str = Field(default="", description="Optional prefix for key-value cache items.")
 
 

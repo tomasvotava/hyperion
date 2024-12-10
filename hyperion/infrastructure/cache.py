@@ -2,8 +2,10 @@
 
 import datetime
 import hashlib
+import tempfile
 import time
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any, ClassVar, cast
 
 import boto3
@@ -49,6 +51,11 @@ class Cache(ABC):
                     default_ttl=storage_config.cache_dynamodb_default_ttl,
                     table_name=storage_config.cache_dynamodb_table,
                 )
+            elif storage_config.cache_local_path:
+                logger.info("Using LocalFileCache.", path=storage_config.cache_local_path)
+                cls._instances[instance_key] = LocalFileCache(
+                    prefix=storage_config.cache_key_prefix, root_path=Path(storage_config.cache_local_path)
+                )
             else:
                 logger.info("Using InMemory Cache.")
                 cls._instances[instance_key] = InMemoryCache(
@@ -66,7 +73,8 @@ class Cache(ABC):
         if not self.hash_keys:
             return key
         key = hashlib.sha256(key.encode(encoding="utf-8")).hexdigest()
-        return f"{self.prefix}:{key}"
+        prefix = f"{self.prefix}:" if self.prefix else ""
+        return f"{prefix}{key}"
 
     def _compress(self, value: str) -> bytes:
         """Compresses a value using snappy compression."""
@@ -133,6 +141,51 @@ class InMemoryCache(Cache):
 
     def hit(self, key: str) -> bool:
         return self._key(key) in self.cache
+
+
+class LocalFileCache(Cache):
+    def __init__(
+        self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, root_path: Path | None = None
+    ) -> None:
+        super().__init__(prefix, hash_keys, default_ttl)
+        self.root_path = root_path or Path(tempfile.mkdtemp())
+        if self.root_path.exists() and not self.root_path.is_dir():
+            raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
+        self.root_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
+        if not hash_keys:
+            logger.warning("When using filesystem cache, it is recommended to hash keys.")
+
+    def _key_path(self, key: str) -> Path:
+        return self.root_path / self._key(key)
+
+    def get(self, key: str) -> str | None:
+        key_path = self._key_path(key)
+        if not key_path.exists():
+            return None
+        logger.debug("Reading key from file.", key=key, path=key_path.as_posix())
+        return self._decompress(key_path.read_bytes())
+
+    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+        key_path = self._key_path(key)
+        logger.debug("Storing key into a file.", key=key, path=key_path.as_posix())
+        key_path.write_bytes(self._compress(value))
+
+    def delete(self, key: str) -> None:
+        key_path = self._key_path(key)
+        if not key_path.exists():
+            return None
+        logger.debug("Removing cached key.", key=key, path=key_path.as_posix())
+        key_path.unlink()
+
+    def hit(self, key: str) -> bool:
+        key_path = self._key_path(key)
+        return key_path.exists()
+
+    def clear(self) -> None:
+        for file in self.root_path.glob("*"):
+            logger.debug("Removing cached key.", path=file.as_posix())
+            file.unlink()
 
 
 class PersistentCache(Cache):
