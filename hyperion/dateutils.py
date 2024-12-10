@@ -164,8 +164,12 @@ def quantize_datetime(base: datetime.datetime, resolution: TimeResolution | str)
     raise ValueError(f"Unsupported resolution unit {resolution.unit!r} for quantization.")  # pragma: no cover
 
 
-def assure_timezone(base: datetime.datetime, tz: datetime.timezone = datetime.timezone.utc) -> datetime.datetime:
+def assure_timezone(
+    base: datetime.datetime | datetime.date, tz: datetime.timezone = datetime.timezone.utc
+) -> datetime.datetime:
     """Assure datetime has a datetime and return it timezone-aware if not."""
+    if not isinstance(base, datetime.datetime):
+        return datetime.datetime(base.year, base.month, base.day, tzinfo=tz)
     if base.tzinfo is not None:
         if base.tzinfo == tz:
             return base
