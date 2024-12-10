@@ -26,13 +26,6 @@ class SourceAsset:
     data: Iterable[dict[str, Any]]
 
 
-async def aiter_dates(dates: list[datetime.datetime] | None) -> AsyncIterator[datetime.datetime]:
-    dates = dates or [datetime.datetime.now(tz=datetime.timezone.utc)]
-    for date in dates:
-        yield date
-        await asyncio.sleep(0)
-
-
 class Source(abc.ABC):
     source: ClassVar[str] = NotImplemented
 
@@ -43,14 +36,22 @@ class Source(abc.ABC):
 
     @abc.abstractmethod
     def run(
-        self, dates: list[datetime.datetime] | None = None
+        self,
+        start_date: datetime.datetime | datetime.date | None = None,
+        end_date: datetime.datetime | datetime.date | None = None,
     ) -> Awaitable[Iterable[SourceAsset]] | AsyncIterator[SourceAsset]:
         """The main coroutine that runs the source extraction."""
 
     @classmethod
-    async def _run(cls, catalog: Catalog, notify: bool = True, dates: list[datetime.datetime] | None = None) -> None:
+    async def _run(
+        cls,
+        catalog: Catalog,
+        notify: bool = True,
+        start_date: datetime.datetime | datetime.date | None = None,
+        end_date: datetime.datetime | datetime.date | None = None,
+    ) -> None:
         source = cls(catalog)
-        result = source.run(dates)
+        result = source.run(start_date=start_date, end_date=end_date)
         if isinstance(result, AsyncIterator):
             async for asset in result:
                 logger.info("Processing asset retrieved from source.", asset=asset.asset)
@@ -85,7 +86,9 @@ class Source(abc.ABC):
                     logger.info("Message is not intended for us.", source=cls.source, message_source=message.source)
                     continue
                 logger.info("Source triggered by an SQS Message.", source=cls.source, message=message)
-                loop.run_until_complete(cls._run(catalog, dates=message.dates, notify=message.notify))
+                loop.run_until_complete(
+                    cls._run(catalog, start_date=message.start_date, end_date=message.end_date, notify=message.notify)
+                )
                 if message.receipt_handle:
                     queue.delete(message.receipt_handle)
             return
@@ -93,7 +96,7 @@ class Source(abc.ABC):
             # We may presume this is an EventBridgeEvent
             event = cast(EventBridgeEvent, event)
             logger.warning("EventBridge events can carry no config for now.")
-            loop.run_until_complete(cls._run(catalog, dates=None))
+            loop.run_until_complete(cls._run(catalog, start_date=None, end_date=None))
             return
         logger.warning("No event was provided, assuming a no-config run.")
-        loop.run_until_complete(cls._run(catalog, dates=None))
+        loop.run_until_complete(cls._run(catalog, start_date=None, end_date=None))

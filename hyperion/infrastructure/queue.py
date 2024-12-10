@@ -47,7 +47,8 @@ class DataLakeArrivalMessage(Message):
 
 class SourceBackfillMessage(Message):
     source: str
-    dates: list[datetime.datetime]
+    start_date: datetime.datetime | datetime.date
+    end_date: datetime.datetime | datetime.date | None = None
     notify: bool = True
 
 
