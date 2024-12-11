@@ -10,7 +10,7 @@ license = "MIT"
 python = ">=3.10,<3.13"
 loguru = "^0.7.2"
 fastavro = "^1.9.7"
-boto3 = "^1.35.59"
+boto3 = "^1.35.36"
 env-proxy = "^1.1.0"
 python-dotenv = "^1.0.1"
 python-snappy = "^0.7.3"
@@ -19,6 +19,7 @@ cachetools = "^5.5.0"
 python-dateutil = "^2.9.0.post0"
 pydantic = "^2.10.2"
 aws-lambda-typing = "^2.20.0"
+aioboto3 = "^13.2.0"
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.7.3"
@@ -78,5 +79,5 @@ addopts = [
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["snappy.*", "googlemaps.*"]
+module = ["snappy.*", "googlemaps.*", "aioboto3.*"]
 ignore_missing_imports = true

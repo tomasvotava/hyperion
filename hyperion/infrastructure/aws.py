@@ -1,17 +1,22 @@
 """AWS helpers and methods."""
 
 import datetime
+import logging
+from contextlib import ExitStack
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import IO, BinaryIO, cast
 
+import aioboto3
 import boto3
 import botocore.exceptions
 
 from hyperion.logging import get_logger
 
 logger = get_logger("aws")
+
+logging.getLogger("botocore.endpoint").setLevel("WARNING")
 
 
 class S3StorageClass(str, Enum):
@@ -39,6 +44,17 @@ class S3ObjectAttributes:
 class S3Client:
     def __init__(self) -> None:
         self._client = boto3.client("s3")
+        self._aio_session = aioboto3.Session()
+
+    async def upload_async(self, file: str | Path | BinaryIO | IO[bytes], bucket: str, name: str) -> None:
+        file_context = ExitStack()
+        if isinstance(file, str | Path):
+            path = Path(file)
+            logger.debug("Uploading from path.", path=path.as_posix(), bucket=bucket, name=name)
+            file = file_context.enter_context(path.open("rb"))
+        with file_context:
+            async with self._aio_session.client("s3") as s3:
+                await s3.upload_fileobj(file, bucket, name)
 
     def upload(self, file: str | Path | BinaryIO | IO[bytes], bucket: str, name: str) -> None:
         if isinstance(file, str | Path):
