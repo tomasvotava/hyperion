@@ -1,0 +1,24 @@
+name: pytest
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        name: Checkout
+      - uses: ./.github/actions/install-all
+        with:
+          python-version: "${{matrix.python-version}}"
+      - name: Run pytest
+        run: poetry run pytest -vv tests/
