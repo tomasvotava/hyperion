@@ -26,9 +26,9 @@ def _moto_server() -> Iterator[None]:
         subprocess.Popen(("moto_server", "-H", "localhost", "-p", str(port)), executable=moto_server_path) as pipe,  # noqa: S603
         apply_env(
             AWS_ACCESS_KEY_ID="testing",
-            AWS_SECRET_ACCESS_KEY="testing",  # noqa: S106
-            AWS_SECURITY_TOKEN="testing",  # noqa: S106
-            AWS_SESSION_TOKEN="testing",  # noqa: S106
+            AWS_SECRET_ACCESS_KEY="testing",  # noqa: S106 # pragma: allowlist secret
+            AWS_SECURITY_TOKEN="testing",  # noqa: S106 # pragma: allowlist secret
+            AWS_SESSION_TOKEN="testing",  # noqa: S106 # pragma: allowlist secret
             AWS_DEFAULT_REGION="us-east-1",
             AWS_ENDPOINT_URL=f"http://localhost:{port}",
         ),
