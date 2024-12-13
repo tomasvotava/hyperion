@@ -17,6 +17,8 @@ class CommonConfig(EnvConfig):
 class StorageConfig(EnvConfig):
     env_proxy = EnvProxy(prefix="HYPERION_STORAGE")
 
+    max_concurrency: int = Field(default=10, description="The maximum number of concurrent storage tasks.")
+
     data_lake_bucket: str = Field(description="Data lake store bucket name.")
     feature_store_bucket: str = Field(description="Feature store bucket name.")
     persistent_store_bucket: str = Field(description="Persistent store bucket name.")

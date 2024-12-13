@@ -214,7 +214,7 @@ class PersistentCache(Cache):
     def __enter__(self) -> None:
         """Retrieve the store to work with the cache."""
         try:
-            data = self.catalog.retrieve_persistent_data(self.asset)
+            data = self.catalog.retrieve_asset(self.asset)
             self._data = {row["key"]: row["value"] for row in data}
             logger.info(
                 f"Retrieved {len(self._data)} items from persistent cache.", asset=self.asset, count=len(self._data)
@@ -230,7 +230,7 @@ class PersistentCache(Cache):
             return None
         timestamp = datetime.datetime.now(tz=datetime.timezone.utc)
         data = ({"key": key, "value": value, "timestamp": timestamp} for key, value in self._data.items())
-        self.catalog.store_persistent_data(self.asset, data)
+        self.catalog.store_asset(self.asset, data)
 
     def get(self, key: str) -> str | None:
         cache_key = self._key(key)

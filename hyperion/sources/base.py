@@ -10,6 +10,7 @@ from typing import Any, ClassVar, cast
 from aws_lambda_typing.context import Context
 from aws_lambda_typing.events import EventBridgeEvent, SQSEvent
 
+from hyperion.asyncutils import AsyncTaskQueue
 from hyperion.catalog import Catalog
 from hyperion.entities.catalog import DataLakeAsset
 from hyperion.infrastructure.queue import SourceBackfillMessage, SQSQueue, iter_messages_from_sqs_event
@@ -52,14 +53,15 @@ class Source(abc.ABC):
     ) -> None:
         source = cls(catalog)
         result = source.run(start_date=start_date, end_date=end_date)
-        if isinstance(result, AsyncIterator):
-            async for asset in result:
-                logger.info("Processing asset retrieved from source.", asset=asset.asset)
-                source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
-        else:
-            for asset in await result:
-                logger.info("Processing asset retrieved from source.", asset=asset.asset)
-                source.catalog.store_data_lake_asset(asset.asset, asset.data, notify=notify)
+        async with AsyncTaskQueue[None]() as queue:
+            if isinstance(result, AsyncIterator):
+                async for asset in result:
+                    logger.info("Processing asset retrieved from source.", asset=asset.asset)
+                    queue.add_task(source.catalog.store_asset_async(asset.asset, asset.data, notify=notify))
+            else:
+                for asset in await result:
+                    logger.info("Processing asset retrieved from source.", asset=asset.asset)
+                    queue.add_task(source.catalog.store_asset_async(asset.asset, asset.data, notify=notify))
 
     @classmethod
     def handle_aws_lambda_event(

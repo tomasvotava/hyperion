@@ -29,6 +29,8 @@ pytest-cov = "^6.0.0"
 boto3-stubs = "^1.35.59"
 types-cachetools = "^5.5.0.20240820"
 types-python-dateutil = "^2.9.0.20241003"
+pytest-asyncio = "^0.24.0"
+moto = {extras = ["server"], version = "^5.0.22"}
 
 [build-system]
 requires = ["poetry-core"]
@@ -66,6 +68,7 @@ select = [
 ]
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 addopts = [
     "-vv",
     "--cov=hyperion",

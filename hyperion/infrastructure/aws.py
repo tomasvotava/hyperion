@@ -2,17 +2,24 @@
 
 import datetime
 import logging
-from contextlib import ExitStack
+from asyncio import Semaphore
+from collections.abc import AsyncIterator
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import IO, BinaryIO, cast
+from typing import IO, BinaryIO, TypeVar, cast
 
 import aioboto3
 import boto3
 import botocore.exceptions
 
+from hyperion.config import storage_config
 from hyperion.logging import get_logger
+
+PathOrIOBinary = str | Path | BinaryIO | IO[bytes]
+
+T = TypeVar("T")
 
 logger = get_logger("aws")
 
@@ -42,21 +49,40 @@ class S3ObjectAttributes:
 
 
 class S3Client:
+    _storage_semaphore: Semaphore | None = None
+
+    @classmethod
+    @asynccontextmanager
+    async def semaphore(cls) -> AsyncIterator[None]:
+        # Lazily initialize the semaphore instance
+        if cls._storage_semaphore is None:
+            logger.debug(
+                "Initializing new storage operations semaphore.", max_concurrency=storage_config.max_concurrency
+            )
+            cls._storage_semaphore = Semaphore(storage_config.max_concurrency)
+        logger.debug("Attempting to acquire the storage operations semaphore.")
+        async with cls._storage_semaphore:
+            logger.debug("Green light, semaphore open.")
+            yield
+
     def __init__(self) -> None:
         self._client = boto3.client("s3")
         self._aio_session = aioboto3.Session()
 
-    async def upload_async(self, file: str | Path | BinaryIO | IO[bytes], bucket: str, name: str) -> None:
-        file_context = ExitStack()
-        if isinstance(file, str | Path):
-            path = Path(file)
-            logger.debug("Uploading from path.", path=path.as_posix(), bucket=bucket, name=name)
-            file = file_context.enter_context(path.open("rb"))
-        with file_context:
-            async with self._aio_session.client("s3") as s3:
-                await s3.upload_fileobj(file, bucket, name)
+    async def upload_async(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
+        with ExitStack() as file_context:
+            if isinstance(file, str | Path):
+                path = Path(file)
+                logger.debug("Uploading from path.", path=path.as_posix(), bucket=bucket, name=name)
+                file = file_context.enter_context(path.open("rb"))
+            async with self.semaphore(), self._aio_session.client("s3") as s3:
+                try:
+                    await s3.upload_fileobj(file, bucket, name)
+                except botocore.exceptions.ClientError:
+                    logger.error("Error when uploading file to S3.", bucket=bucket, name=name)
+                    raise
 
-    def upload(self, file: str | Path | BinaryIO | IO[bytes], bucket: str, name: str) -> None:
+    def upload(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
         if isinstance(file, str | Path):
             file = Path(file)
             logger.debug("Uploading from path.", path=file.as_posix(), bucket=bucket, name=name)
@@ -101,7 +127,7 @@ class S3Client:
             )
             raise
 
-    def download(self, bucket: str, name: str, file: str | Path | BinaryIO | IO[bytes]) -> None:
+    def download(self, bucket: str, name: str, file: PathOrIOBinary) -> None:
         if isinstance(file, str | Path):
             file = Path(file)
             logger.debug("Downloading into a path.", path=file.as_posix(), bucket=bucket, name=name)

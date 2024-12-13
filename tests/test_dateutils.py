@@ -6,10 +6,14 @@ import pytest
 from hyperion.dateutils import (
     TimeResolution,
     TimeResolutionUnit,
+    assure_timezone,
     iter_dates_between,
     quantize_datetime,
     truncate_datetime,
 )
+
+# ignore missing timzeone for this file
+# ruff: noqa: DTZ001
 
 
 def utc_datetime(*args: Any, **kwargs: Any) -> datetime.datetime:
@@ -203,3 +207,22 @@ def test_iter_datetimes_between(
     expected: list[datetime.datetime],
 ) -> None:
     assert list(iter_dates_between(start_date, end_date, granularity)) == expected
+
+
+@pytest.mark.parametrize(
+    ("base", "expected"),
+    [
+        (datetime.date(2024, 1, 1), datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc)),
+        (datetime.datetime(2024, 1, 2, 3, 4, 5), datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.timezone.utc)),
+        (
+            datetime.datetime(2024, 1, 1, 10, tzinfo=datetime.timezone(datetime.timedelta(hours=1))),
+            datetime.datetime(2024, 1, 1, 9, tzinfo=datetime.timezone.utc),
+        ),
+        (
+            datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        ),
+    ],
+)
+def test_assure_timezone(base: datetime.datetime | datetime.date, expected: datetime.datetime) -> None:
+    assert assure_timezone(base) == expected

@@ -3,6 +3,7 @@
 import datetime
 import tempfile
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any, BinaryIO, ClassVar, TypedDict
 from uuid import uuid4
@@ -12,6 +13,7 @@ import fastavro
 import fastavro.validation
 import fastavro.write
 
+from hyperion.asyncutils import AsyncTaskQueue, aiter_any
 from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
 from hyperion.dateutils import TimeResolutionUnit, truncate_datetime
@@ -189,10 +191,8 @@ class Catalog:
             persistent_store_prefix=storage_config.persistent_store_prefix,
         )
 
-    def _store_asset(self, asset: AssetProtocol, data: Iterable[dict[str, Any]]) -> None:
-        """Store an asset in its bucket."""
-        store_config = self._get_store_config(asset)
-        logger.info("Preparing asset storage.", asset=asset, **store_config)
+    @contextmanager
+    def _prepare_asset_storage(self, asset: AssetProtocol, data: Iterable[dict[str, Any]]) -> Iterator[IO[bytes]]:
         with tempfile.NamedTemporaryFile("+wb") as file:
             schema = SchemaStore.from_config().get_asset_schema(asset)
             path = Path(file.name)
@@ -200,25 +200,37 @@ class Catalog:
             _write_avro(file, schema, data, asset.to_metadata())
             logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
             file.seek(0)
+            yield file
 
-            self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
+    async def store_asset_async(
+        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True
+    ) -> None:
+        """Store an asset in its bucket asynchronously."""
+        store_config = self._get_store_config(asset)
+        logger.info("Preparing asset storage.", asset=asset, **store_config)
+        with self._prepare_asset_storage(asset, data) as file:
+            await self.s3_client.upload_async(
+                file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
+            )
+        if notify:
+            self._notify_asset_arrival(asset)
 
-    def store_data_lake_asset(self, asset: DataLakeAsset, data: Iterable[dict[str, Any]], notify: bool = True) -> None:
-        """Store asset specified by its metadata and data generator into a fitting place in the data lake."""
-        self._store_asset(asset, data)
-        if not notify:
+    def _notify_asset_arrival(self, asset: AssetProtocol) -> None:
+        if not isinstance(asset, DataLakeAsset):
+            logger.debug("Skipping notification for asset, not DataLakeAsset type.", asset=asset)
             return
         message = DataLakeArrivalMessage(asset=asset, event=ArrivalEvent.ARRIVED)
         logger.info("Sending data lake arrival message.", asset=asset, message=message, queue=self.queue)
         self.queue.send(message)
 
-    def store_persistent_data(self, asset: PersistentStoreAsset, data: Iterable[dict[str, Any]]) -> None:
-        """Store data in a persistent store."""
-        self._store_asset(asset, data)
-
-    def store_feature(self, asset: FeatureAsset, data: Iterable[dict[str, Any]]) -> None:
-        """Store feature in the feature store."""
-        self._store_asset(asset, data)
+    def store_asset(self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True) -> None:
+        """Store an asset in its bucket."""
+        store_config = self._get_store_config(asset)
+        logger.info("Preparing asset storage.", asset=asset, **store_config)
+        with self._prepare_asset_storage(asset, data) as file:
+            self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
+        if notify:
+            self._notify_asset_arrival(asset)
 
     def _get_store_config(self, asset: AssetProtocol) -> StoreBucketConfig:
         try:
@@ -240,7 +252,7 @@ class Catalog:
                 raise AssetNotFoundError(asset) from error
             raise
 
-    def _retrieve_asset(self, asset: AssetProtocol) -> Iterator[dict[str, Any]]:
+    def retrieve_asset(self, asset: AssetProtocol) -> Iterator[dict[str, Any]]:
         """Retrieve an asset based on its type and store config."""
         store_config = self._get_store_config(asset)
         file_size = self.get_asset_file_size(asset)
@@ -262,23 +274,11 @@ class Catalog:
                     )
                     raise TypeError("Unexpected data received when reading asset data.")
 
-    def retrieve_data_lake_asset(self, asset: DataLakeAsset) -> Iterator[dict[str, Any]]:
-        """Retrieve a data lake asset specified by its metadata and iterate its content."""
-        return self._retrieve_asset(asset)
-
-    def retrieve_persistent_data(self, asset: PersistentStoreAsset) -> Iterator[dict[str, Any]]:
-        """Retrieve a persistent store asset specified by its metadata and iterate its content."""
-        return self._retrieve_asset(asset)
-
-    def retrieve_feature(self, asset: FeatureAsset) -> Iterator[dict[str, Any]]:
-        """Retrieve a feature store data."""
-        return self._retrieve_asset(asset)
-
-    def reparition(
+    async def reparition(
         self, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
     ) -> None:
         repartitioner = AssetRepartitioner(self, asset, granularity, date_attribute)
-        repartitioner.repartition()
+        await repartitioner.repartition()
 
 
 class AssetRepartitioner:
@@ -318,8 +318,8 @@ class AssetRepartitioner:
         self._state[partition_date] = handler
         return handler
 
-    def repartition(self) -> None:
-        data = self.catalog.retrieve_data_lake_asset(self.asset)
+    async def repartition(self) -> None:
+        data = self.catalog.retrieve_asset(self.asset)
         with self:
             for record in data:
                 timestamp = record.get(self.date_attribute)
@@ -333,16 +333,14 @@ class AssetRepartitioner:
                 writer.write(record)
             store_config = self.catalog._get_store_config(self.asset)
             logger.info("Finished creating partitioned avro files.")
-            for file, asset, writer in self._state.values():
-                logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
-                writer.dump()
-                file.seek(0)
-                self.catalog.s3_client.upload(
-                    file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
-                )
 
-
-if __name__ == "__main__":
-    catalog = Catalog.from_config()
-    asset = DataLakeAsset("WeatherHistory", datetime.datetime(2024, 12, 9, tzinfo=datetime.timezone.utc))
-    catalog.reparition(asset, "M")
+            async with AsyncTaskQueue[None]() as queue:
+                async for file, asset, writer in aiter_any(self._state.values()):
+                    logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
+                    writer.dump()
+                    file.seek(0)
+                    queue.add_task(
+                        self.catalog.s3_client.upload_async(
+                            file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
+                        )
+                    )
