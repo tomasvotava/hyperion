@@ -1,9 +1,10 @@
 """The data catalog."""
 
+import asyncio
 import datetime
 import tempfile
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import IO, Any, BinaryIO, ClassVar, TypedDict
 from uuid import uuid4
@@ -208,7 +209,8 @@ class Catalog:
         """Store an asset in its bucket asynchronously."""
         store_config = self._get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
-        with self._prepare_asset_storage(asset, data) as file:
+        with ExitStack() as stack:
+            file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data))
             await self.s3_client.upload_async(
                 file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
             )
@@ -339,7 +341,7 @@ class AssetRepartitioner:
                     logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
                     writer.dump()
                     file.seek(0)
-                    queue.add_task(
+                    await queue.add_task(
                         self.catalog.s3_client.upload_async(
                             file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
                         )

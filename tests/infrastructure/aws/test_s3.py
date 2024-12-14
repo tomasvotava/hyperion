@@ -91,6 +91,6 @@ async def test_s3_multiupload() -> None:
     async with AsyncTaskQueue[None]() as queue:
         async for file_id in aiter_any(range(MULTI_TEST_FILES_COUNT)):
             file = BytesIO(f"content of file {file_id}".encode())
-            queue.add_task(client.upload_async(file, TEST_BUCKET, f"multitest/file-{file_id}.txt"))
+            await queue.add_task(client.upload_async(file, TEST_BUCKET, f"multitest/file-{file_id}.txt"))
     for file_id in range(MULTI_TEST_FILES_COUNT):
         assert client.download_as_string(TEST_BUCKET, f"multitest/file-{file_id}.txt") == f"content of file {file_id}"

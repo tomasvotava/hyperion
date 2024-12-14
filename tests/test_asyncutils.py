@@ -70,7 +70,8 @@ async def test_aiter_unsupported() -> None:
         await collect_test(None)
 
 
-async def test_async_task_queue() -> None:
+@pytest.mark.parametrize(("maxsize", "max_duration", "min_duration"), [(0, 2, 1), (2, 4, 2)])
+async def test_async_task_queue(maxsize: int, max_duration: int, min_duration: int) -> None:
     class _Cororun:
         def __init__(self) -> None:
             self.called = 0
@@ -81,10 +82,10 @@ async def test_async_task_queue() -> None:
 
     cororun = _Cororun()
     start_time = time.monotonic()
-    async with AsyncTaskQueue[None]() as queue:
+    async with AsyncTaskQueue[None](maxsize=maxsize) as queue:
         async for _ in aiter_any(range(5)):
-            queue.add_task(cororun.task())
+            await queue.add_task(cororun.task())
     duration = time.monotonic() - start_time
     assert cororun.called == 5
-    assert duration >= 1
-    assert duration < 2
+    assert duration >= min_duration
+    assert duration < max_duration

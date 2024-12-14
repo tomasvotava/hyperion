@@ -4,6 +4,8 @@ import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+from hyperion.logging import get_logger
+
 if sys.version_info >= (3, 11) and TYPE_CHECKING:
     from typing import Self
 
@@ -11,6 +13,9 @@ if sys.version_info < (3, 11) and TYPE_CHECKING:
     from typing_extensions import Self
 
 T = TypeVar("T")
+
+
+logger = get_logger("hyperion-asyncutils")
 
 
 async def iter_async(iterable: Iterable[T]) -> AsyncIterator[T]:
@@ -37,9 +42,15 @@ async def aiter_any(
 
 
 class AsyncTaskQueue(Generic[T]):
-    def __init__(self) -> None:
+    def __init__(self, maxsize: int = 0) -> None:
         self.tasklist: list[asyncio.Task[T]] = []
         self._entered = False
+        self.maxsize = maxsize
+
+    async def _flush(self) -> None:
+        logger.debug(f"Max size of {self.maxsize} reached, waiting for enqueued tasks to finish.")
+        await asyncio.gather(*self.tasklist)
+        self.tasklist = []
 
     async def __aenter__(self) -> "Self":
         self.tasklist = []
@@ -48,9 +59,11 @@ class AsyncTaskQueue(Generic[T]):
 
     async def __aexit__(self, *args: Any) -> None:
         self._entered = False
-        await asyncio.gather(*self.tasklist)
+        await self._flush()
 
-    def add_task(self, coroutine: Coroutine[Any, Any, T]) -> None:
+    async def add_task(self, coroutine: Coroutine[Any, Any, T]) -> None:
         if not self._entered:
             raise RuntimeError(f"{self.__class__.__name__!r} must be used in an 'async with' context.")
+        if self.maxsize and len(self.tasklist) >= self.maxsize:
+            await self._flush()
         self.tasklist.append(asyncio.create_task(coroutine))
