@@ -70,19 +70,14 @@ class S3Client:
         self._aio_session = aioboto3.Session()
 
     async def upload_async(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
-        logger.warning("Calling upload async")
         with ExitStack() as file_context:
             if isinstance(file, str | Path):
                 path = Path(file)
                 logger.debug("Uploading from path.", path=path.as_posix(), bucket=bucket, name=name)
                 file = file_context.enter_context(path.open("rb"))
-            logger.warning("Acquiring semaphore.")
             async with self.semaphore(), self._aio_session.client("s3") as s3:
-                logger.warning("Semaphore acquired")
                 try:
-                    logger.warning("Uploading fileobj")
                     await s3.upload_fileobj(file, bucket, name)
-                    logger.warning("Upload done")
                 except botocore.exceptions.ClientError:
                     logger.error("Error when uploading file to S3.", bucket=bucket, name=name)
                     raise
