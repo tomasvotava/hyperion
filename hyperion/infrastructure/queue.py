@@ -65,6 +65,29 @@ def iter_messages_from_sqs_event(event: SQSEvent) -> Iterator[Message]:
         yield Message.deserialize(record["body"], message_type, record["receiptHandle"])
 
 
+def create_backfill_event(
+    message: SourceBackfillMessage, message_id: str = "test", receipt_handle: str = ""
+) -> SQSEvent:
+    return {
+        "Records": [
+            {
+                "body": message.model_dump_json(),
+                "messageId": message_id,
+                "receiptHandle": receipt_handle,
+                "messageAttributes": {
+                    "MessageType": {
+                        "binaryListValues": [],
+                        "binaryValue": None,
+                        "dataType": "String",
+                        "stringListValues": [],
+                        "stringValue": "SourceBackfillMessage",
+                    }
+                },
+            }
+        ]
+    }
+
+
 class Queue(abc.ABC):
     @staticmethod
     def from_config() -> "Queue":
