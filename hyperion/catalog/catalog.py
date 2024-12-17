@@ -404,13 +404,17 @@ class AssetRepartitioner:
         self._state[partition_date] = handler
         return handler
 
-    async def repartition(self) -> None:
+    async def repartition(self, data: Iterable[dict[str, Any]] | None = None) -> None:
         """Repartition the asset.
 
         This method reads the asset data, partitions it based on the date attribute and granularity,
         and uploads the partitioned data to the data lake bucket.
+        If data is not provided, the asset is retrieved from the catalog.
+
+        Args:
+            data (Iterable[dict[str, Any]], optional): The data to repartition. Defaults to None.
         """
-        data = self.catalog.retrieve_asset(self.asset)
+        data = data or self.catalog.retrieve_asset(self.asset)
         with self:
             for record in data:
                 timestamp = record.get(self.date_attribute)
