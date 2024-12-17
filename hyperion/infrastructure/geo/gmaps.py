@@ -19,10 +19,13 @@ cache_asset = PersistentStoreAsset("GEOCodeCache", schema_version=1)
 
 
 class GoogleMaps:
+    """Google Maps API client."""
+
     _instance: ClassVar["GoogleMaps | None"] = None
 
     @classmethod
     def from_config(cls) -> "GoogleMaps":
+        """Get the Google Maps API client instance from the configuration."""
         if cls._instance is None:
             if geo_config.gmaps_api_key is None:
                 raise ValueError("Google Maps API key is not set.")
@@ -30,6 +33,11 @@ class GoogleMaps:
         return cls._instance
 
     def __init__(self, api_key: str) -> None:
+        """Initialize the Google Maps API client.
+
+        Args:
+            api_key (str): The Google Maps API key.
+        """
         self.geocode_cache = PersistentCache("gmaps", hash_keys=False, asset=cache_asset)
         self.client = googlemaps.Client(key=api_key)
         self._cache_context: ExitStack | None = None
@@ -44,6 +52,14 @@ class GoogleMaps:
         self._cache_context.close()
 
     def geocode(self, address: str) -> Location:
+        """Geocode an address.
+
+        Args:
+            address (str): The address to geocode.
+
+        Returns:
+            Location: The geocoded location.
+        """
         if (cached_location := self.geocode_cache.get(address)) is not None:
             logger.debug("Using geocoded information from cache.", address=address, location=cached_location)
             return Location(**json.loads(cached_location))

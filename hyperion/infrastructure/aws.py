@@ -27,6 +27,8 @@ logging.getLogger("botocore.endpoint").setLevel("WARNING")
 
 
 class S3StorageClass(str, Enum):
+    """S3 storage classes."""
+
     STANDARD = "STANDARD"
     REDUCED_REDUNDANCY = "REDUCED_REDUNDANCY"
     STANDARD_IA = "STANDARD_IA"
@@ -42,6 +44,8 @@ class S3StorageClass(str, Enum):
 
 @dataclass
 class S3ObjectAttributes:
+    """Attributes of an S3 object."""
+
     last_modified: datetime.datetime
     etag: str
     storage_class: S3StorageClass
@@ -49,11 +53,14 @@ class S3ObjectAttributes:
 
 
 class S3Client:
+    """S3 client."""
+
     _storage_semaphore: Semaphore | None = None
 
     @classmethod
     @asynccontextmanager
     async def semaphore(cls) -> AsyncIterator[None]:
+        """Semaphore for asynchronous storage operations."""
         # Lazily initialize the semaphore instance
         if cls._storage_semaphore is None:
             logger.debug(
@@ -70,6 +77,13 @@ class S3Client:
         self._aio_session = aioboto3.Session()
 
     async def upload_async(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
+        """Upload a file to S3 asynchronously.
+
+        Args:
+            file (PathOrIOBinary): The file to upload.
+            bucket (str): The bucket to upload the file to.
+            name (str): The name of the file in the bucket.
+        """
         with ExitStack() as file_context:
             if isinstance(file, str | Path):
                 path = Path(file)
@@ -83,6 +97,13 @@ class S3Client:
                     raise
 
     def upload(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
+        """Upload a file to S3.
+
+        Args:
+            file (PathOrIOBinary): The file to upload.
+            bucket (str): The bucket to upload the file to.
+            name (str): The name of the file in the bucket.
+        """
         if isinstance(file, str | Path):
             file = Path(file)
             logger.debug("Uploading from path.", path=file.as_posix(), bucket=bucket, name=name)
@@ -100,6 +121,15 @@ class S3Client:
             raise
 
     def get_object_attributes(self, bucket: str, name: str) -> S3ObjectAttributes:
+        """Get the attributes of an object in S3.
+
+        Args:
+            bucket (str): The bucket containing the object.
+            name (str): The name of the object.
+
+        Returns:
+            S3ObjectAttributes: The attributes of the object.
+        """
         response = self._client.get_object_attributes(
             Bucket=bucket,
             Key=name,
@@ -128,6 +158,13 @@ class S3Client:
             raise
 
     def download(self, bucket: str, name: str, file: PathOrIOBinary) -> None:
+        """Download a file from S3.
+
+        Args:
+            bucket (str): The bucket containing the file.
+            name (str): The name of the file.
+            file (PathOrIOBinary): The file to download to.
+        """
         if isinstance(file, str | Path):
             file = Path(file)
             logger.debug("Downloading into a path.", path=file.as_posix(), bucket=bucket, name=name)
@@ -145,6 +182,15 @@ class S3Client:
             raise
 
     def download_as_string(self, bucket: str, name: str) -> str:
+        """Download an object from S3 as a string.
+
+        Args:
+            bucket (str): The bucket containing the object.
+            name (str): The name of the object.
+
+        Returns:
+            str: The object as a string.
+        """
         logger.debug("Downloading object as a string.", bucket=bucket, name=name)
         try:
             return cast(str, self._client.get_object(Bucket=bucket, Key=name)["Body"].read().decode("utf-8"))

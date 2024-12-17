@@ -64,6 +64,13 @@ class Cache(ABC):
         return cls._instances[instance_key]
 
     def __init__(self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS):
+        """Initializes the cache with the given prefix and default TTL.
+
+        Args:
+            prefix (str): The prefix for the cache keys.
+            hash_keys (bool): Whether to hash the keys.
+            default_ttl (int): The default TTL for the cache.
+        """
         self.prefix = prefix
         self.hash_keys = hash_keys
         self.default_ttl = default_ttl
@@ -118,6 +125,8 @@ class Cache(ABC):
 
 
 class InMemoryCache(Cache):
+    """An in-memory cache for our shenanigans."""
+
     MAX_KEYS = 1000
 
     def __init__(
@@ -144,6 +153,8 @@ class InMemoryCache(Cache):
 
 
 class LocalFileCache(Cache):
+    """A local file cache for our shenanigans."""
+
     def __init__(
         self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, root_path: Path | None = None
     ) -> None:
@@ -191,6 +202,10 @@ class LocalFileCache(Cache):
 class PersistentCache(Cache):
     """Uses a persistent store asset to store the cached data.
 
+    Persistent store asset is a key-value store that is stored in the catalog.
+    Please note that for now, there is no locking mechanism in place and two services using the same cache
+    may overwrite each other's data.
+
     Note that `default_ttl` and all ttl-related arguments are ignored.
     """
 
@@ -204,6 +219,16 @@ class PersistentCache(Cache):
         asset: "PersistentStoreAsset | None" = None,
         catalog: Catalog | None = None,
     ):
+        """Initializes the persistent cache with the given prefix, asset, and catalog.
+
+        Args:
+            prefix (str): The prefix for the cache keys.
+            hash_keys (bool): Whether to hash the keys.
+            default_ttl (int): The default TTL for the cache.
+            asset (PersistentStoreAsset, optional): The asset to use for the cache. Must be provided.
+            catalog (Catalog, optional): The catalog to use for the cache. Defaults to None
+                and creates a new one from the config.
+        """
         super().__init__(prefix, hash_keys, default_ttl)
         if asset is None:
             raise ValueError("No asset provided for persistent cache.")

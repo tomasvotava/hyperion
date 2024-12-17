@@ -29,6 +29,8 @@ logger = get_logger("catalog")
 
 
 class StoreBucketConfig(TypedDict):
+    """Configuration for storing assets in a bucket."""
+
     bucket: str
     prefix: str
 
@@ -52,6 +54,8 @@ def _unpack_args(*args: Any, **kwargs: Any) -> tuple[Any, ...]:
 
 
 class PersistentStore:
+    """A persistent store for assets."""
+
     # TODO: Unfinished business
     # https://github.com/Zephyr-Trade/FVE-map/issues/9
     _instances: ClassVar[dict[tuple[PersistentStoreAsset, str, str], "PersistentStore"]] = {}
@@ -65,6 +69,13 @@ class PersistentStore:
     def __init__(
         self, asset: PersistentStoreAsset, persistent_store_bucket: str, persistent_store_prefix: str = ""
     ) -> None:
+        """Initialize the persistent store.
+
+        Args:
+            asset (PersistentStoreAsset): The asset to store.
+            persistent_store_bucket (str): The bucket to store the asset in.
+            persistent_store_prefix (str): The prefix for the asset in the bucket.
+        """
         self.asset = asset
         self.persistent_store_bucket = persistent_store_bucket
         self.persistent_store_prefix = persistent_store_prefix
@@ -72,6 +83,10 @@ class PersistentStore:
         self._etag: str | None = None
 
     def cleanup(self) -> None:
+        """Clean up the persistent store.
+
+        This method deletes the local file if it exists.
+        """
         if self._local_path is None:
             logger.debug("Persistent store was not retrieved, nothing to clean up.", asset=self.asset)
             return
@@ -82,6 +97,7 @@ class PersistentStore:
         self._local_path = None
 
     def retrieve(self) -> None:
+        """Retrieve the persistent store from the S3 bucket."""
         s3_client = S3Client()
         try:
             remote_etag = s3_client.get_object_attributes(
@@ -122,9 +138,16 @@ class PersistentStore:
 
 
 class WritablePersistentStore(PersistentStore):
+    """A writable persistent store for assets."""
+
     # TODO: Unfinished business
     # https://github.com/Zephyr-Trade/FVE-map/issues/9
     def store(self, data: Iterable[dict[str, Any]]) -> None:
+        """Store data in the persistent store.
+
+        Args:
+            data (Iterable[dict[str, Any]]): The data to store.
+        """
         with tempfile.TemporaryFile("+wb") as file:
             logger.info("Pouring persistent store asset into temporary file.", asset=self.asset, path=file.name)
             schema = SchemaStore.from_config().get_asset_schema(self.asset)
@@ -150,6 +173,11 @@ def _write_avro(
 
 
 class Catalog:
+    """The data catalog.
+
+    The catalog is responsible for storing and retrieving assets.
+    """
+
     def __init__(
         self,
         *,
@@ -161,6 +189,17 @@ class Catalog:
         persistent_store_prefix: str = "",
         queue: Queue | None = None,
     ) -> None:
+        """Initialize the catalog.
+
+        Args:
+            data_lake_bucket (str): The bucket for data lake assets.
+            feature_store_bucket (str): The bucket for feature store assets.
+            persistent_store_bucket (str): The bucket for persistent store assets.
+            data_lake_prefix (str): The prefix for data lake assets.
+            feature_store_prefix (str): The prefix for feature store assets.
+            persistent_store_prefix (str): The prefix for persistent store assets.
+            queue (Queue, optional): The queue to use for notifications. Defaults to None.
+        """
         self.data_lake_bucket = data_lake_bucket
         self.feature_store_bucket = feature_store_bucket
         self.persistent_store_bucket = persistent_store_bucket
@@ -177,12 +216,14 @@ class Catalog:
 
     @property
     def s3_client(self) -> S3Client:
+        """Get the S3 client."""
         if self._s3_client is None:
             self._s3_client = S3Client()
         return self._s3_client
 
     @staticmethod
     def from_config() -> "Catalog":
+        """Create a catalog from the configuration."""
         return Catalog(
             data_lake_bucket=storage_config.data_lake_bucket,
             feature_store_bucket=storage_config.feature_store_bucket,
@@ -206,7 +247,13 @@ class Catalog:
     async def store_asset_async(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True
     ) -> None:
-        """Store an asset in its bucket asynchronously."""
+        """Store an asset in its bucket asynchronously.
+
+        Args:
+            asset (AssetProtocol): The asset to store.
+            data (Iterable[dict[str, Any]]): The data to store.
+            notify (bool, optional): Whether to send a notification. Defaults to True.
+        """
         store_config = self._get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with ExitStack() as stack:
@@ -226,7 +273,13 @@ class Catalog:
         self.queue.send(message)
 
     def store_asset(self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True) -> None:
-        """Store an asset in its bucket."""
+        """Store an asset in its bucket.
+
+        Args:
+            asset (AssetProtocol): The asset to store.
+            data (Iterable[dict[str, Any]]): The data to store.
+            notify (bool, optional): Whether to send a notification. Defaults to True.
+        """
         store_config = self._get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with self._prepare_asset_storage(asset, data) as file:
@@ -242,7 +295,14 @@ class Catalog:
             raise
 
     def get_asset_file_size(self, asset: AssetProtocol) -> int:
-        """Find asset avro file and get its file size in bytes."""
+        """Find asset avro file and get its file size in bytes.
+
+        Args:
+            asset (AssetProtocol): The asset to get the file size for.
+
+        Returns:
+            int: The file size in bytes.
+        """
         store_config = self._get_store_config(asset)
 
         object_path = asset.get_path(store_config["prefix"])
@@ -255,7 +315,14 @@ class Catalog:
             raise
 
     def retrieve_asset(self, asset: AssetProtocol) -> Iterator[dict[str, Any]]:
-        """Retrieve an asset based on its type and store config."""
+        """Retrieve an asset based on its type and store config.
+
+        Args:
+            asset (AssetProtocol): The asset to retrieve.
+
+        Yields:
+            dict[str, Any]: The asset data.
+        """
         store_config = self._get_store_config(asset)
         file_size = self.get_asset_file_size(asset)
         logger.info("Preparing asset for retrieval.", asset=asset, file_size=file_size, **store_config)
@@ -279,14 +346,31 @@ class Catalog:
     async def reparition(
         self, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
     ) -> None:
+        """Repartition a data lake asset based on a time resolution unit.
+
+        Args:
+            asset (DataLakeAsset): The asset to repartition.
+            granularity (TimeResolutionUnit): The time resolution unit to use.
+            date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
+        """
         repartitioner = AssetRepartitioner(self, asset, granularity, date_attribute)
         await repartitioner.repartition()
 
 
 class AssetRepartitioner:
+    """A class to repartition a data lake asset based on a time resolution unit."""
+
     def __init__(
         self, catalog: Catalog, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
     ) -> None:
+        """Initialize the repartitioner.
+
+        Args:
+            catalog (Catalog): The catalog to use.
+            asset (DataLakeAsset): The asset to repartition.
+            granularity (TimeResolutionUnit): The time resolution unit to use.
+            date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
+        """
         self.catalog = catalog
         self.asset = asset
         self.granularity = granularity
@@ -321,6 +405,11 @@ class AssetRepartitioner:
         return handler
 
     async def repartition(self) -> None:
+        """Repartition the asset.
+
+        This method reads the asset data, partitions it based on the date attribute and granularity,
+        and uploads the partitioned data to the data lake bucket.
+        """
         data = self.catalog.retrieve_asset(self.asset)
         with self:
             for record in data:
