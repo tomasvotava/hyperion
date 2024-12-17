@@ -344,17 +344,24 @@ class Catalog:
                     raise TypeError("Unexpected data received when reading asset data.")
 
     async def reparition(
-        self, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
+        self,
+        asset: DataLakeAsset,
+        granularity: TimeResolutionUnit,
+        date_attribute: str = "timestamp",
+        data: Iterable[dict[str, Any]] | None = None,
     ) -> None:
         """Repartition a data lake asset based on a time resolution unit.
+
+        If data is not provided, the asset is retrieved from the catalog.
 
         Args:
             asset (DataLakeAsset): The asset to repartition.
             granularity (TimeResolutionUnit): The time resolution unit to use.
             date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
+            data (Iterable[dict[str, Any]], optional): The data to repartition. Defaults to None.
         """
         repartitioner = AssetRepartitioner(self, asset, granularity, date_attribute)
-        await repartitioner.repartition()
+        await repartitioner.repartition(data)
 
 
 class AssetRepartitioner:
