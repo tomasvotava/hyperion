@@ -38,8 +38,10 @@ class TimeResolution:
         return TimeResolution(value=value, unit=unit)
 
 
-def truncate_datetime(base: datetime.datetime, unit: TimeResolutionUnit) -> datetime.datetime:
+def truncate_datetime(base: datetime.datetime | datetime.date, unit: TimeResolutionUnit) -> datetime.datetime:
     """Truncate datetime to the specified unit (set all smaller units to zero)."""
+    if not isinstance(base, datetime.datetime):
+        base = datetime.datetime(base.year, base.month, base.day, tzinfo=datetime.timezone.utc)
     match unit:
         case "s":
             return base.replace(microsecond=0)
