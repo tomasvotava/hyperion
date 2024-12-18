@@ -7,7 +7,7 @@ from hyperion.infrastructure.http import redact_url
     ("url", "replace", "expected"),
     [
         (
-            "https://username:password@hostname.tld/path/to/resource",
+            "https://username:password@hostname.tld/path/to/resource",  # pragma: allowlist secret
             "***",
             "https://username:***@hostname.tld/path/to/resource",
         ),

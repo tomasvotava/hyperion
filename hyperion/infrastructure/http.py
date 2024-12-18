@@ -21,16 +21,16 @@ def redact_url(url: str, replace: str = "***") -> str:
 
 class AsyncHTTPClientWrapper:
     def __init__(self) -> None:
-        self.__client: httpx.AsyncClient | None = None
-        self.__stacklevel = 0
+        self._client: httpx.AsyncClient | None = None
+        self._stacklevel = 0
 
     async def __aenter__(self) -> httpx.AsyncClient:
-        self.__stacklevel += 1
-        if self.__client is None:
+        self._stacklevel += 1
+        if self._client is None:
             logger.debug("Creating and entering httpx async client.")
-            self.__client = httpx.AsyncClient(mounts=self.__get_proxy_mounts())
-            await self.__client.__aenter__()
-        return self.__client
+            self._client = httpx.AsyncClient(mounts=self._get_proxy_mounts())
+            await self._client.__aenter__()
+        return self._client
 
     async def __aexit__(
         self,
@@ -38,14 +38,14 @@ class AsyncHTTPClientWrapper:
         exc_value: BaseException | None = None,
         traceback: TracebackType | None = None,
     ) -> None:
-        self.__stacklevel -= 1
-        if self.__stacklevel == 0 and self.__client is not None:
+        self._stacklevel -= 1
+        if self._stacklevel == 0 and self._client is not None:
             logger.info("Closing httpx async client.")
-            await self.__client.__aexit__(exc_type, exc_value, traceback)
-            self.__client = None
+            await self._client.__aexit__(exc_type, exc_value, traceback)
+            self._client = None
 
     @staticmethod
-    def __get_proxy_mounts() -> dict[str, httpx.AsyncHTTPTransport]:
+    def _get_proxy_mounts() -> dict[str, httpx.AsyncHTTPTransport]:
         proxy_mounts: dict[str, httpx.AsyncHTTPTransport] = {}
         if http_config.proxy_http:
             redacted_url = redact_url(http_config.proxy_http)
