@@ -62,8 +62,16 @@ class GeoConfig(EnvConfig):
     gmaps_api_key: str | None = Field(description="Google Maps API key.")
 
 
+class HttpConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="HYPERION_HTTP")
+
+    proxy_http: str | None = Field(default=None)
+    proxy_https: str | None = Field(default=None)
+
+
 config = CommonConfig()
 storage_config = StorageConfig()
 geo_config = GeoConfig()
 queue_config = QueueConfig()
 secrets_config = SecretsConfig()
+http_config = HttpConfig()
