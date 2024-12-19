@@ -4,7 +4,7 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import ClassVar, cast
+from typing import ClassVar, Generic, TypeVar, cast
 
 import haversine
 import numpy as np
@@ -18,6 +18,8 @@ LATITUDE_DEGREE_TO_METERS = 111_000
 EARTH_RADIUS_METERS = get_avg_earth_radius(haversine.Unit.METERS)
 
 logger = get_logger("hyperion-geo")
+
+AnyLocation = TypeVar("AnyLocation", bound="Location")
 
 
 def meters_to_degrees(meters: float, at_latitude: float) -> tuple[float, float]:
@@ -35,10 +37,10 @@ def meters_to_degrees(meters: float, at_latitude: float) -> tuple[float, float]:
     )
 
 
-class SpatialKMeans:
+class SpatialKMeans(Generic[AnyLocation]):
     """K-means clustering for geographical locations."""
 
-    def __init__(self, locations: Iterable["Location"]) -> None:
+    def __init__(self, locations: Iterable[AnyLocation]) -> None:
         """Initialize the K-means clustering with the given locations.
 
         Args:
@@ -57,7 +59,7 @@ class SpatialKMeans:
             ]
         )
 
-    def fit(self, k: int, max_iters: int = 100) -> dict["Location", list["Location"]]:
+    def fit(self, k: int, max_iters: int = 100) -> dict["Location", list[AnyLocation]]:
         """Fit the K-means model with k clusters and return the clusters.
 
         Args:
@@ -87,7 +89,7 @@ class SpatialKMeans:
                 break
             centroids = new_centroids
 
-        clusters: dict[Location, list[Location]] = defaultdict(list)
+        clusters: dict[Location, list[AnyLocation]] = defaultdict(list)
         centroid_locations = [Location(float(lat), float(lon)) for lat, lon in centroids]
 
         for location_id, centroid_id in enumerate(cluster_assignments):
@@ -147,8 +149,8 @@ class Location:
         return self._get_distance_haversine(other)
 
     def get_nearest(
-        self, others: Iterable["Location"], threshold: float | None = None, approximate: bool = False
-    ) -> "Location":
+        self, others: Iterable[AnyLocation], threshold: float | None = None, approximate: bool = False
+    ) -> AnyLocation:
         """Get the closest location from the iterable of locations.
 
         If threshold is given and all locations are further than the threshold in meters, an ValueError is raised.
@@ -161,7 +163,7 @@ class Location:
         Returns:
             Location: The nearest location.
         """
-        nearest: tuple[Location, float] | None = None
+        nearest: tuple[AnyLocation, float] | None = None
         for other in others:
             distance = self.get_distance(other, approximate=approximate)
             if nearest is None or nearest[1] > distance:
