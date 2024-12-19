@@ -179,5 +179,5 @@ class Location:
                 nearest = (other, distance)
         if nearest is None:
             raise ValueError(f"None of the given locations is close enough to {self!r}.")
-        logger.info("Found nearest location.", this=self, other=nearest[0], distance=nearest[1])
+        logger.debug("Found nearest location.", this=self, other=nearest[0], distance=nearest[1])
         return nearest[0]
