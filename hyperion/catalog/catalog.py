@@ -393,13 +393,13 @@ class AssetRepartitioner:
     """A class to repartition a data lake asset based on a time resolution unit."""
 
     def __init__(
-        self, catalog: Catalog, asset: DataLakeAsset, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
+        self, catalog: Catalog, asset: AssetProtocol, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
     ) -> None:
         """Initialize the repartitioner.
 
         Args:
             catalog (Catalog): The catalog to use.
-            asset (DataLakeAsset): The asset to repartition.
+            asset (AssetProtocol): The asset to repartition.
             granularity (TimeResolutionUnit): The time resolution unit to use.
             date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
         """
