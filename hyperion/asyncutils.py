@@ -41,6 +41,16 @@ async def aiter_any(
         yield item
 
 
+def get_loop() -> asyncio.AbstractEventLoop:
+    """Get the current running loop or create a new one if not running."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
 class AsyncTaskQueue(Generic[T]):
     def __init__(self, maxsize: int = 0) -> None:
         self.tasklist: list[asyncio.Task[T]] = []
