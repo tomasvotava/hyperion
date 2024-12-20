@@ -370,7 +370,7 @@ class Catalog:
 
     async def reparition(
         self,
-        asset: DataLakeAsset,
+        asset: AssetProtocol,
         granularity: TimeResolutionUnit,
         date_attribute: str = "timestamp",
         data: Iterable[dict[str, Any]] | None = None,
