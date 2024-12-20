@@ -10,7 +10,7 @@ from typing import Any, ClassVar, cast
 from aws_lambda_typing.context import Context
 from aws_lambda_typing.events import EventBridgeEvent, SQSEvent
 
-from hyperion.asyncutils import AsyncTaskQueue
+from hyperion.asyncutils import AsyncTaskQueue, get_loop
 from hyperion.catalog import Catalog
 from hyperion.config import storage_config
 from hyperion.entities.catalog import DataLakeAsset
@@ -74,7 +74,7 @@ class Source(abc.ABC):
     ) -> None:
         logger.info("Starting Hyperion source.", source=cls.__name__, event=str(event), context=str(context))
         catalog = Catalog.from_config()
-        loop = loop or asyncio.new_event_loop()
+        loop = loop or get_loop()
         queue = SQSQueue.from_config()
         if isinstance(event, dict) and "Records" in event:
             # We may presume this is an SQS Event
