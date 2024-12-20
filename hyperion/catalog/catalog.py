@@ -3,10 +3,10 @@
 import asyncio
 import datetime
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, Any, BinaryIO, ClassVar, TypedDict
+from typing import IO, Any, BinaryIO, ClassVar, Literal, TypedDict, overload
 from uuid import uuid4
 
 import botocore.exceptions
@@ -17,7 +17,7 @@ import fastavro.write
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
 from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
-from hyperion.dateutils import TimeResolutionUnit, truncate_datetime
+from hyperion.dateutils import TimeResolution, TimeResolutionUnit, quantize_datetime, truncate_datetime
 from hyperion.entities.catalog import AssetProtocol, DataLakeAsset, FeatureAsset, PersistentStoreAsset
 from hyperion.infrastructure.aws import S3Client
 from hyperion.infrastructure.queue import ArrivalEvent, DataLakeArrivalMessage, Queue
@@ -271,6 +271,31 @@ class Catalog:
         message = DataLakeArrivalMessage(asset=asset, event=ArrivalEvent.ARRIVED)
         logger.info("Sending data lake arrival message.", asset=asset, message=message, queue=self.queue)
         self.queue.send(message)
+
+    def get_feature_data(
+        self,
+        name: str,
+        resolution: TimeResolution | str,
+        the_now: datetime.datetime | None = None,
+        tolerance: int = 0,
+    ) -> Iterator[dict[str, Any]]:
+        resolution = resolution if isinstance(resolution, TimeResolution) else TimeResolution.from_str(resolution)
+        the_now = the_now or datetime.datetime.now(tz=datetime.timezone.utc)
+        try_timestamps = [the_now - resolution.delta * i for i in range(0, tolerance + 1)]
+        for timestamp in try_timestamps:
+            feature_timestamp = quantize_datetime(timestamp, resolution)
+            logger.warning("Timestamps", timestamp=timestamp, feature_timestamp=feature_timestamp)
+            feature_asset = FeatureAsset(name, feature_timestamp, resolution)
+            logger.debug(
+                f"Trying to find feature data for feature {feature_asset.feature_name!r}.", feature_asset=feature_asset
+            )
+            try:
+                self.get_asset_file_size(feature_asset)
+            except AssetNotFoundError as error:
+                logger.error(f"Feature asset was not found - {error}.", feature_asset=feature_asset)
+                continue
+            return self.retrieve_asset(feature_asset)
+        raise AssetNotFoundError(feature_asset)
 
     def store_asset(self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True) -> None:
         """Store an asset in its bucket.

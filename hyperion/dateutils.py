@@ -37,6 +37,26 @@ class TimeResolution:
         unit = cast(TimeResolutionUnit, rematch.group("unit"))
         return TimeResolution(value=value, unit=unit)
 
+    @property
+    def delta(self) -> datetime.timedelta | relativedelta:
+        match self.unit:
+            case "s":
+                return datetime.timedelta(seconds=self.value)
+            case "m":
+                return datetime.timedelta(minutes=self.value)
+            case "h":
+                return datetime.timedelta(hours=self.value)
+            case "d":
+                return datetime.timedelta(days=self.value)
+            case "w":
+                return datetime.timedelta(days=self.value * 7)
+            case "M":
+                return relativedelta(months=self.value)
+            case "y":
+                return relativedelta(years=self.value)
+            case _:
+                raise ValueError(f"Unsupported time unit {self.unit!r}.")
+
 
 def truncate_datetime(base: datetime.datetime | datetime.date, unit: TimeResolutionUnit) -> datetime.datetime:
     """Truncate datetime to the specified unit (set all smaller units to zero)."""

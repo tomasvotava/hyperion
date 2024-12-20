@@ -24,6 +24,7 @@ T = TypeVar("T")
 logger = get_logger("aws")
 
 logging.getLogger("botocore.endpoint").setLevel("WARNING")
+logging.getLogger("botocore").setLevel("WARNING")
 
 
 class S3StorageClass(str, Enum):
