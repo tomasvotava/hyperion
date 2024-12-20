@@ -3,10 +3,10 @@
 import asyncio
 import datetime
 import tempfile
-from collections.abc import AsyncIterator, Coroutine, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, Any, BinaryIO, ClassVar, Literal, TypedDict, overload
+from typing import IO, Any, BinaryIO, ClassVar, TypedDict
 from uuid import uuid4
 
 import botocore.exceptions
