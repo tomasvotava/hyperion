@@ -167,15 +167,6 @@ class Location:
         for other in others:
             distance = self.get_distance(other, approximate=approximate)
             if nearest is None or nearest[1] > distance:
-                if threshold and distance > threshold:
-                    logger.debug(
-                        "Distance is nearest so far, but it's larger than the threshold.",
-                        this=self,
-                        other=other,
-                        distance=distance,
-                        threshold=threshold,
-                    )
-                    continue
                 nearest = (other, distance)
         if nearest is None:
             raise ValueError(f"None of the given locations is close enough to {self!r}.")
