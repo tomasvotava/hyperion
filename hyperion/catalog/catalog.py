@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, Any, BinaryIO, ClassVar, TypedDict
+from typing import IO, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypedDict, TypeVar, cast
 from uuid import uuid4
 
 import botocore.exceptions
@@ -26,6 +26,9 @@ from hyperion.logging import get_logger
 __all__ = ["AssetNotFoundError", "Catalog", "CatalogError"]
 
 logger = get_logger("catalog")
+
+RepartitionableAssetType: TypeAlias = FeatureAsset | DataLakeAsset
+RepartitionableAsset = TypeVar("RepartitionableAsset", bound=RepartitionableAssetType)
 
 
 class StoreBucketConfig(TypedDict):
@@ -254,7 +257,7 @@ class Catalog:
             data (Iterable[dict[str, Any]]): The data to store.
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
-        store_config = self._get_store_config(asset)
+        store_config = self.get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with ExitStack() as stack:
             file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data))
@@ -283,9 +286,9 @@ class Catalog:
         the_now = the_now or datetime.datetime.now(tz=datetime.timezone.utc)
         try_timestamps = [the_now - resolution.delta * i for i in range(0, tolerance + 1)]
         for timestamp in try_timestamps:
-            feature_timestamp = quantize_datetime(timestamp, resolution)
-            logger.warning("Timestamps", timestamp=timestamp, feature_timestamp=feature_timestamp)
-            feature_asset = FeatureAsset(name, feature_timestamp, resolution)
+            feature_partition_date = quantize_datetime(timestamp, resolution)
+            logger.warning("Timestamps", timestamp=timestamp, feature_timestamp=feature_partition_date)
+            feature_asset = FeatureAsset(name, feature_partition_date, resolution)
             logger.debug(
                 f"Trying to find feature data for feature {feature_asset.feature_name!r}.", feature_asset=feature_asset
             )
@@ -305,16 +308,17 @@ class Catalog:
             data (Iterable[dict[str, Any]]): The data to store.
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
-        store_config = self._get_store_config(asset)
+        store_config = self.get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with self._prepare_asset_storage(asset, data) as file:
             self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
         if notify:
             self._notify_asset_arrival(asset)
 
-    def _get_store_config(self, asset: AssetProtocol) -> StoreBucketConfig:
+    def get_store_config(self, asset: AssetProtocol | type[AssetProtocol]) -> StoreBucketConfig:
         try:
-            return self._config_map[asset.__class__]
+            config_key = asset if isinstance(asset, type) else asset.__class__
+            return self._config_map[config_key]
         except KeyError:
             logger.error("Attempting to get store config for an unsupported asset tyoe.", asset=asset)
             raise
@@ -328,7 +332,7 @@ class Catalog:
         Returns:
             int: The file size in bytes.
         """
-        store_config = self._get_store_config(asset)
+        store_config = self.get_store_config(asset)
 
         object_path = asset.get_path(store_config["prefix"])
         logger.info("Getting attributes for an asset.", asset=asset, **store_config)
@@ -348,7 +352,7 @@ class Catalog:
         Yields:
             dict[str, Any]: The asset data.
         """
-        store_config = self._get_store_config(asset)
+        store_config = self.get_store_config(asset)
         file_size = self.get_asset_file_size(asset)
         logger.info("Preparing asset for retrieval.", asset=asset, file_size=file_size, **store_config)
         with tempfile.NamedTemporaryFile("+wb") as file:
@@ -368,9 +372,9 @@ class Catalog:
                     )
                     raise TypeError("Unexpected data received when reading asset data.")
 
-    async def reparition(
+    async def repartition(
         self,
-        asset: AssetProtocol,
+        asset: DataLakeAsset | FeatureAsset,
         granularity: TimeResolutionUnit,
         date_attribute: str = "timestamp",
         data: Iterable[dict[str, Any]] | None = None,
@@ -389,17 +393,21 @@ class Catalog:
         await repartitioner.repartition(data)
 
 
-class AssetRepartitioner:
+class AssetRepartitioner(Generic[RepartitionableAsset]):
     """A class to repartition a data lake asset based on a time resolution unit."""
 
     def __init__(
-        self, catalog: Catalog, asset: AssetProtocol, granularity: TimeResolutionUnit, date_attribute: str = "timestamp"
+        self,
+        catalog: Catalog,
+        asset: RepartitionableAsset,
+        granularity: TimeResolutionUnit,
+        date_attribute: str = "timestamp",
     ) -> None:
         """Initialize the repartitioner.
 
         Args:
             catalog (Catalog): The catalog to use.
-            asset (AssetProtocol): The asset to repartition.
+            asset (DataLakeAsset | FeatureAsset): The asset to repartition.
             granularity (TimeResolutionUnit): The time resolution unit to use.
             date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
         """
@@ -407,8 +415,9 @@ class AssetRepartitioner:
         self.asset = asset
         self.granularity = granularity
         self.date_attribute = date_attribute
+        self._partition_name = "date" if isinstance(self.asset, DataLakeAsset) else "timestamp"
 
-        self._state: dict[datetime.datetime, tuple[IO[bytes], DataLakeAsset, fastavro.write.Writer]] = {}
+        self._state: dict[datetime.datetime, tuple[IO[bytes], RepartitionableAsset, fastavro.write.Writer]] = {}
 
     def __enter__(self) -> None:
         self._state = {}
@@ -418,13 +427,31 @@ class AssetRepartitioner:
             logger.info("Closing temporary file.", path=file.name)
             file.close()
 
-    def _get_handler(self, partition_date: datetime.datetime) -> tuple[IO[bytes], DataLakeAsset, fastavro.write.Writer]:
+    def _create_partition_asset(self, partition_date: datetime.datetime) -> RepartitionableAsset:
+        if isinstance(self.asset, DataLakeAsset):
+            return cast(RepartitionableAsset, DataLakeAsset(self.asset.name, partition_date, self.asset.schema_version))
+        if isinstance(self.asset, FeatureAsset):
+            return cast(
+                RepartitionableAsset,
+                FeatureAsset(
+                    self.asset.name,
+                    partition_date,
+                    self.asset.resolution,
+                    self.asset.schema_version,
+                    self.asset.partition_keys,
+                ),
+            )
+        raise TypeError(f"Unsupported asset type {type(self.asset)!r}.")
+
+    def _get_handler(
+        self, partition_date: datetime.datetime
+    ) -> tuple[IO[bytes], RepartitionableAsset, fastavro.write.Writer]:
         if partition_date in self._state:
             return self._state[partition_date]
         logger.info("Creating a new handler for partition date.", partition_date=partition_date.isoformat())
         file = tempfile.NamedTemporaryFile("+wb")  # noqa: SIM115
         logger.info(f"Partition will be temporarily stored in {file.name!r}.", path=file.name)
-        asset = DataLakeAsset(self.asset.name, partition_date, self.asset.schema_version)
+        asset = self._create_partition_asset(partition_date)
         writer = fastavro.write.Writer(
             file,
             schema=SchemaStore.from_config().get_asset_schema(asset),
@@ -458,10 +485,10 @@ class AssetRepartitioner:
                 partition_date = truncate_datetime(timestamp, self.granularity)
                 _, __, writer = self._get_handler(partition_date)
                 writer.write(record)
-            store_config = self.catalog._get_store_config(self.asset)
+            store_config = self.catalog.get_store_config(self.asset)
             logger.info("Finished creating partitioned avro files.")
 
-            async with AsyncTaskQueue[None]() as queue:
+            async with AsyncTaskQueue[None](maxsize=5) as queue:
                 async for file, asset, writer in aiter_any(self._state.values()):
                     logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
                     writer.dump()
