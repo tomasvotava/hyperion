@@ -115,7 +115,7 @@ class FeatureAsset:
     Attributes:
         asset_type (ClassVar[AssetType]): The type of the asset.
         name (str): The name of the asset.
-        timestamp (datetime.datetime): The timestamp of the asset.
+        partition_date (datetime.datetime): The partition timestamp of the asset.
         resolution (TimeResolution | str): The resolution of the asset.
         schema_version (int): The schema version of the asset.
         partition_keys (dict[str, str]): The partition keys of the asset.
@@ -123,7 +123,7 @@ class FeatureAsset:
 
     asset_type: ClassVar[AssetType] = "feature"
     name: str
-    timestamp: datetime.datetime
+    partition_date: datetime.datetime
     resolution: TimeResolution | str
     schema_version: int = 1
     partition_keys: dict[str, str] = field(default_factory=dict)
@@ -146,19 +146,19 @@ class FeatureAsset:
 
     def get_path(self, prefix: str = "") -> str:
         """Get the path for the asset with the given prefix."""
-        timestamp = assure_timezone(self.timestamp).isoformat()
+        partition_date = assure_timezone(self.partition_date).isoformat()
         keys_prefix = self._get_partition_keys_prefix()
         if keys_prefix:
             keys_prefix = keys_prefix + "/"
         return _get_prefixed_path(
-            f"{self.feature_name}/{keys_prefix}timestamp={timestamp}/v{self.schema_version}.avro", prefix
+            f"{self.feature_name}/{keys_prefix}partition_date={partition_date}/v{self.schema_version}.avro", prefix
         )
 
     def to_metadata(self) -> dict[str, str]:
         """Get the metadata for the asset."""
         return {
             "name": self.name,
-            "timestamp": self.timestamp.isoformat(),
+            "partition_date": self.partition_date.isoformat(),
             "schema_version": str(self.schema_version),
             "partition_keys": json.dumps(self.partition_keys),
         }
