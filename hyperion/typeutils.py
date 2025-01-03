@@ -15,7 +15,10 @@ def assert_type(variable: Any, assertion: type[T]) -> T:
 
 
 def dataclass_asdict(
-    dataclass: "DataclassInstance", *, exclude: Sequence[str] | None = None, include: Sequence[str] | None
+    dataclass: "DataclassInstance",
+    *,
+    exclude: Sequence[str] | None = None,
+    include: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Convert a dataclass instance to a dictionary.
 
