@@ -77,9 +77,8 @@ class Cache(ABC):
 
     def _key(self, key: str) -> str:
         """Generates a cache key from a given key."""
-        if not self.hash_keys:
-            return key
-        key = hashlib.sha256(key.encode(encoding="utf-8")).hexdigest()
+        if self.hash_keys:
+            key = hashlib.sha256(key.encode(encoding="utf-8")).hexdigest()
         prefix = f"{self.prefix}:" if self.prefix else ""
         return f"{prefix}{key}"
 
