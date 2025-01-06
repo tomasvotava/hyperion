@@ -7,12 +7,16 @@ import gzip
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from fnmatch import fnmatch
-from typing import Literal, cast
+from typing import Literal, TypeGuard, cast
 
 import boto3
 import snappy
 
 CompressionType = Literal["snappy", "gzip"]
+
+
+def is_valid_compression_type(compression_type: str) -> TypeGuard[CompressionType]:
+    return compression_type in ("snappy", "gzip")
 
 
 class KeyValueStore(ABC, Iterable[str]):
