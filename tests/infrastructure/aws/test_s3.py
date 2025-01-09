@@ -94,3 +94,14 @@ async def test_s3_multiupload() -> None:
             await queue.add_task(client.upload_async(file, TEST_BUCKET, f"multitest/file-{file_id}.txt"))
     for file_id in range(MULTI_TEST_FILES_COUNT):
         assert client.download_as_string(TEST_BUCKET, f"multitest/file-{file_id}.txt") == f"content of file {file_id}"
+
+
+def test_s3_iter_objects() -> None:
+    client = S3Client()
+    for fileno in range(100):
+        with BytesIO(b"test") as fake_file:
+            client.upload(fake_file, TEST_BUCKET, f"listing-prefix/{fileno}.file")
+    filelist = list(client.iter_objects(TEST_BUCKET, "listing-prefix/"))
+    assert len(filelist) == 100
+    assert filelist[0].startswith("listing-prefix/")
+    assert filelist[0].endswith(".file")

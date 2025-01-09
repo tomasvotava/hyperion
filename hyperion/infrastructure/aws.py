@@ -3,7 +3,7 @@
 import datetime
 import logging
 from asyncio import Semaphore
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -96,6 +96,22 @@ class S3Client:
                 except botocore.exceptions.ClientError:
                     logger.error("Error when uploading file to S3.", bucket=bucket, name=name)
                     raise
+
+    def iter_objects(self, bucket: str, prefix: str) -> Iterator[str]:
+        """Iterate over objects in an S3 bucket.
+
+        Args:
+            bucket (str): The bucket to list objects in.
+            prefix (str): The prefix to filter objects by.
+
+        Yields:
+            Iterator[str]: The keys of the objects in the bucket.
+        """
+        paginator = self._client.get_paginator("list_objects_v2")
+        pagination_config = {"StartingToken": None}
+        response_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig=pagination_config)
+        for response in response_iterator:
+            yield from (s3_object["Key"] for s3_object in response["Contents"])
 
     def upload(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
         """Upload a file to S3.

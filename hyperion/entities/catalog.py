@@ -8,7 +8,16 @@ from hyperion.dateutils import TimeResolution, assure_timezone
 AssetType = Literal["data_lake", "feature", "persistent_store"]
 
 
-def _get_prefixed_path(path: str, prefix: str = "") -> str:
+def get_prefixed_path(path: str, prefix: str = "") -> str:
+    """Get the path with the given prefix.
+
+    Args:
+        path (str): The path.
+        prefix (str): The prefix.
+
+    Returns:
+        str: The path with the prefix.
+    """
     prefix = prefix.strip("/")
     if prefix:
         prefix = f"{prefix}/"
@@ -72,7 +81,7 @@ class DataLakeAsset:
     def get_path(self, prefix: str = "") -> str:
         """Get the path for the asset with the given prefix."""
         date = assure_timezone(self.date).isoformat()
-        return _get_prefixed_path(f"{self.name}/date={date}/v{self.schema_version}.avro", prefix)
+        return get_prefixed_path(f"{self.name}/date={date}/v{self.schema_version}.avro", prefix)
 
     def to_metadata(self) -> dict[str, str]:
         """Get the metadata for the asset."""
@@ -98,7 +107,7 @@ class PersistentStoreAsset:
 
     def get_path(self, prefix: str = "") -> str:
         """Get the path for the asset with the given prefix."""
-        return _get_prefixed_path(f"{self.name}/v{self.schema_version}.avro", prefix)
+        return get_prefixed_path(f"{self.name}/v{self.schema_version}.avro", prefix)
 
     def to_metadata(self) -> dict[str, str]:
         """Get the metadata for the asset."""
@@ -150,7 +159,7 @@ class FeatureAsset:
         keys_prefix = self._get_partition_keys_prefix()
         if keys_prefix:
             keys_prefix = keys_prefix + "/"
-        return _get_prefixed_path(
+        return get_prefixed_path(
             f"{self.feature_name}/{keys_prefix}partition_date={partition_date}/v{self.schema_version}.avro", prefix
         )
 

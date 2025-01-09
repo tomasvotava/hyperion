@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import re
 import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -17,8 +18,14 @@ import fastavro.write
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
 from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
-from hyperion.dateutils import TimeResolution, TimeResolutionUnit, quantize_datetime, truncate_datetime
-from hyperion.entities.catalog import AssetProtocol, DataLakeAsset, FeatureAsset, PersistentStoreAsset
+from hyperion.dateutils import TimeResolution, TimeResolutionUnit, assure_timezone, quantize_datetime, truncate_datetime
+from hyperion.entities.catalog import (
+    AssetProtocol,
+    DataLakeAsset,
+    FeatureAsset,
+    PersistentStoreAsset,
+    get_prefixed_path,
+)
 from hyperion.infrastructure.aws import S3Client
 from hyperion.infrastructure.queue import ArrivalEvent, DataLakeArrivalMessage, Queue
 from hyperion.logging import get_logger
@@ -371,6 +378,68 @@ class Catalog:
                         got=str(type(row)),
                     )
                     raise TypeError("Unexpected data received when reading asset data.")
+
+    def iter_datalake_partitions(self, asset_name: str, date_part: str | None = None) -> Iterator[DataLakeAsset]:
+        """Iterate over data lake partitions.
+
+        Providing the date part can significantly reduce the number of keys to iterate over.
+        Partition dates are stored as ISO formatted strings, therefore the date part should be in the same format.
+        E.g. to only iterate over partitions for January 2025, provide '2025-01'.
+
+        Args:
+            asset_name (str): The name of the asset.
+            date_part (str, optional): The date part to filter by. Defaults to None.
+
+        Yields:
+            DataLakeAsset: The data lake asset.
+        """
+        store_config = self.get_store_config(DataLakeAsset)
+        keys_prefix = get_prefixed_path(f"{asset_name}/date={date_part if date_part else ''}", store_config["prefix"])
+        version_patt = re.compile(r"v(?P<version>\d+)\.avro")
+        for key in self.s3_client.iter_objects(store_config["bucket"], keys_prefix):
+            try:
+                key_asset_name, partition, filename = key.split("/")
+            except ValueError:
+                logger.warning(
+                    "The key path does not have 'Asset/Partition/Version' format and will be skipped.", key=key
+                )
+                continue
+            if key_asset_name != asset_name:
+                logger.warning(
+                    "The key path does not match the asset name and will be skipped.", key=key, asset_name=asset_name
+                )
+                continue
+            if (match := version_patt.match(filename)) is None:
+                logger.warning("The key path does not match the version pattern and will be skipped.", key=key)
+                continue
+            version = int(match.group("version"))
+            partition_date_str = partition.split("date=")[1]
+            partition_date = datetime.datetime.fromisoformat(partition_date_str)
+            yield DataLakeAsset(asset_name, assure_timezone(partition_date), version)
+
+    def find_latest_datalake_partition(self, asset_name: str, date_part: str | None = None) -> DataLakeAsset:
+        """Find the latest data lake partition.
+
+        Providing the date part can significantly reduce the number of keys to iterate over.
+        Partition dates are stored as ISO formatted strings, therefore the date part should be in the same format.
+        E.g. to only iterate over partitions for January 2025, provide '2025-01'.
+
+        Args:
+            asset_name (str): The name of the asset.
+            date_part (str, optional): The date part to filter by. Defaults to None.
+
+        Returns:
+            DataLakeAsset: The latest data lake partition.
+        """
+        return next(
+            iter(
+                sorted(
+                    self.iter_datalake_partitions(asset_name, date_part),
+                    key=lambda partition: partition.date,
+                    reverse=True,
+                )
+            )
+        )
 
     async def repartition(
         self,
