@@ -19,6 +19,7 @@ from hyperion.logging import get_logger
 
 DEFAULT_TTL_SECONDS = 60
 DYNAMODB_MAX_LENGTH = 65535
+DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
 
 logger = get_logger("cache")
 
@@ -103,7 +104,7 @@ class Cache(ABC):
         pass
 
     @abstractmethod
-    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+    def set(self, key: str, value: str) -> None:
         """Sets a value in the cache."""
         pass
 
@@ -138,7 +139,7 @@ class InMemoryCache(Cache):
     def get(self, key: str) -> str | None:
         return self.cache.get(self._key(key))
 
-    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+    def set(self, key: str, value: str) -> None:
         self.cache[self._key(key)] = value
 
     def delete(self, key: str) -> None:
@@ -155,28 +156,70 @@ class LocalFileCache(Cache):
     """A local file cache for our shenanigans."""
 
     def __init__(
-        self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, root_path: Path | None = None
+        self,
+        prefix: str,
+        hash_keys: bool = True,
+        default_ttl: int = DEFAULT_TTL_SECONDS,
+        root_path: Path | None = None,
+        max_size: int | None = DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE,
     ) -> None:
         super().__init__(prefix, hash_keys, default_ttl)
         self.root_path = root_path or Path(tempfile.mkdtemp())
         if self.root_path.exists() and not self.root_path.is_dir():
             raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
+        self.max_size = max_size
         self.root_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
         if not hash_keys:
             logger.warning("When using filesystem cache, it is recommended to hash keys.")
+        self.shrink_to_fit_max_size()
+
+    def cleanup(self) -> None:
+        """Clean up all expired files from the cache."""
+        for key_path in self.root_path.iterdir():
+            if key_path.is_file() and self._is_expired(key_path):
+                logger.debug("Cleaning up expired file.", key_path=key_path)
+                key_path.unlink()
+
+    def get_total_size(self) -> int:
+        return sum(key_path.stat().st_size for key_path in self.root_path.iterdir() if key_path.is_file())
+
+    def shrink_to_fit_max_size(self) -> None:
+        self.cleanup()
+        if not self.max_size or self.max_size < 0:
+            return
+        total_size = self.get_total_size()
+        keys_ordered = sorted(self.root_path.iterdir(), key=lambda key: key.stat().st_mtime)
+        while total_size > self.max_size:
+            key_path = keys_ordered.pop(0)
+            if not key_path.is_file():
+                continue
+            size = key_path.stat().st_size
+            logger.debug("Cleaning up old file to make some space.", key_path=key_path, size=size)
+            key_path.unlink()
+            total_size -= size
 
     def _key_path(self, key: str) -> Path:
         return self.root_path / self._key(key)
+
+    def _is_expired(self, key: str | Path) -> bool:
+        if isinstance(key, str):
+            key = self._key_path(key)
+        current_time = time.time()
+        return (current_time - key.stat().st_mtime) > self.default_ttl
 
     def get(self, key: str) -> str | None:
         key_path = self._key_path(key)
         if not key_path.exists():
             return None
+        if self._is_expired(key_path):
+            logger.debug("Key is expired, deleting file.", key=key, key_path=key_path)
+            key_path.unlink()
+            return None
         logger.debug("Reading key from file.", key=key, path=key_path.as_posix())
         return self._decompress(key_path.read_bytes())
 
-    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+    def set(self, key: str, value: str) -> None:
         key_path = self._key_path(key)
         logger.debug("Storing key into a file.", key=key, path=key_path.as_posix())
         key_path.write_bytes(self._compress(value))
@@ -193,7 +236,9 @@ class LocalFileCache(Cache):
         return key_path.exists()
 
     def clear(self) -> None:
-        for file in self.root_path.glob("*"):
+        for file in self.root_path.iterdir():
+            if not file.is_file():
+                continue
             logger.debug("Removing cached key.", path=file.as_posix())
             file.unlink()
 
@@ -266,7 +311,7 @@ class PersistentCache(Cache):
             raise RuntimeError("Persistent cache must be used as a context manager.")
         return self._data
 
-    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
+    def set(self, key: str, value: str) -> None:
         cache_key = self._key(key)
         self.data[cache_key] = value
 
@@ -303,8 +348,8 @@ class DynamoDBCache(Cache):
             return self._decompress(bytes(item["value"]))
         return None
 
-    def set(self, key: str, value: str, ttl: int = DEFAULT_TTL_SECONDS) -> None:
-        expiration_time = int(time.time()) + ttl
+    def set(self, key: str, value: str) -> None:
+        expiration_time = int(time.time()) + self.default_ttl
         cache_key = self._key(key)
         compressed_value = self._compress(value)
         if len(compressed_value) > DYNAMODB_MAX_LENGTH:
