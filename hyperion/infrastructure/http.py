@@ -1,3 +1,4 @@
+import asyncio
 from types import TracebackType
 from urllib.parse import urlparse
 
@@ -23,13 +24,15 @@ class AsyncHTTPClientWrapper:
     def __init__(self) -> None:
         self._client: httpx.AsyncClient | None = None
         self._stacklevel = 0
+        self._lock = asyncio.Lock()
 
     async def __aenter__(self) -> httpx.AsyncClient:
-        self._stacklevel += 1
-        if self._client is None:
-            logger.debug("Creating and entering httpx async client.")
-            self._client = httpx.AsyncClient(mounts=self._get_proxy_mounts())
-            await self._client.__aenter__()
+        async with self._lock:
+            self._stacklevel += 1
+            if self._client is None or self._client.is_closed:
+                logger.debug("Creating and entering httpx async client.")
+                self._client = httpx.AsyncClient(mounts=self._get_proxy_mounts())
+                await self._client.__aenter__()
         return self._client
 
     async def __aexit__(
@@ -38,11 +41,12 @@ class AsyncHTTPClientWrapper:
         exc_value: BaseException | None = None,
         traceback: TracebackType | None = None,
     ) -> None:
-        self._stacklevel -= 1
-        if self._stacklevel == 0 and self._client is not None:
-            logger.info("Closing httpx async client.")
-            await self._client.__aexit__(exc_type, exc_value, traceback)
-            self._client = None
+        async with self._lock:
+            self._stacklevel -= 1
+            if self._stacklevel == 0 and self._client is not None:
+                logger.info("Closing httpx async client.")
+                await self._client.__aexit__(exc_type, exc_value, traceback)
+                self._client = None
 
     @staticmethod
     def _get_proxy_mounts() -> dict[str, httpx.AsyncHTTPTransport]:
