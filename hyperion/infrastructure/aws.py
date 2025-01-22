@@ -109,6 +109,7 @@ class S3Client:
         """
         paginator = self._client.get_paginator("list_objects_v2")
         pagination_config = {"StartingToken": None}
+        logger.debug("Listing contents of a bucket.", bucket=bucket, prefix=prefix)
         response_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig=pagination_config)
         for response in response_iterator:
             yield from (s3_object["Key"] for s3_object in response["Contents"])
