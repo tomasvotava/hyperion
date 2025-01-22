@@ -112,6 +112,9 @@ class S3Client:
         logger.debug("Listing contents of a bucket.", bucket=bucket, prefix=prefix)
         response_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig=pagination_config)
         for response in response_iterator:
+            logger.debug("Received a response from S3.", response=response)
+            if "Contents" not in response:
+                continue
             yield from (s3_object["Key"] for s3_object in response["Contents"])
 
     def upload(self, file: PathOrIOBinary, bucket: str, name: str) -> None:
