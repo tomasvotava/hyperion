@@ -200,3 +200,35 @@ def assure_timezone(
         return base.astimezone(tz)
     logger.warning(f"A timezone-unaware timestamp was given, assuming {tz!r}.")
     return base.replace(tzinfo=tz)
+
+
+def get_date_pattern(date: datetime.datetime, unit: TimeResolutionUnit) -> str:
+    """Get a date pattern string up to the specified unit level.
+
+    Examples:
+        >>> get_date_pattern(datetime.datetime(2025, 1, 12, 12), "h")
+        "2025-01-12T12"
+        >>> get_date_pattern(datetime.datetime(2025, 1, 12, 12), "d")
+        "2025-01-12"
+        >>> get_date_pattern(datetime.datetime(2025, 1, 12, 12), "M")
+        "2025-01"
+        >>> get_date_pattern(datetime.datetime(2025, 1, 12, 12), "y")
+        "2025"
+    """
+    truncated = truncate_datetime(date, unit)
+    match unit:
+        case "s":
+            return truncated.strftime("%Y-%m-%dT%H:%M:%S")
+        case "m":
+            return truncated.strftime("%Y-%m-%dT%H:%M")
+        case "h":
+            return truncated.strftime("%Y-%m-%dT%H")
+        case "d":
+            return truncated.strftime("%Y-%m-%d")
+        case "w":
+            return truncated.strftime("%Y-%m-%d")  # Week is special, keep the day
+        case "M":
+            return truncated.strftime("%Y-%m")
+        case "y":
+            return truncated.strftime("%Y")
+    raise ValueError(f"Unsupported time unit {unit!r}.")
