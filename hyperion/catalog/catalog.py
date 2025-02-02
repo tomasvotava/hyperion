@@ -18,7 +18,14 @@ import fastavro.write
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
 from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
-from hyperion.dateutils import TimeResolution, TimeResolutionUnit, assure_timezone, quantize_datetime, truncate_datetime
+from hyperion.dateutils import (
+    TimeResolution,
+    TimeResolutionUnit,
+    assure_timezone,
+    iter_dates_between,
+    quantize_datetime,
+    truncate_datetime,
+)
 from hyperion.entities.catalog import (
     AssetProtocol,
     DataLakeAsset,
@@ -440,6 +447,49 @@ class Catalog:
                 )
             )
         )
+
+    def iter_feature_store_partitions(
+        self,
+        feature_name: str,
+        resolution: TimeResolution | str,
+        date_from: datetime.datetime,
+        date_to: datetime.datetime,
+        version: int = 1,
+    ) -> Iterator[FeatureAsset]:
+        """Iterate over feature store partitions relevant for a given time range.
+
+        For a given time range, finds all feature store partitions that could contain
+        data for that range based on the feature's resolution. For example, for dates
+        between 2025-01-01 and 2025-01-15 with 7d resolution, this would check partitions
+        2025-01-08, 2025-01-15, and 2025-01-22, since data points from those dates would
+        be stored in these quantized partitions.
+
+        Args:
+            feature_name (str): The name of the feature.
+            resolution (TimeResolution | str): The time resolution of the feature.
+            date_from (datetime.datetime): Start of the time range to find partitions for.
+            date_to (datetime.datetime): End of the time range to find partitions for.
+            version (int): Schema version of the feature. Defaults to 1.
+
+        Yields:
+            FeatureAsset: Feature store assets that could contain data for the time range.
+        """
+        resolution = resolution if isinstance(resolution, TimeResolution) else TimeResolution.from_str(resolution)
+
+        dates = iter_dates_between(date_from, date_to, resolution.unit)
+
+        partition_dates = {quantize_datetime(date, resolution) for date in dates}
+
+        for partition_date in sorted(partition_dates):
+            feature_asset = FeatureAsset(feature_name, partition_date, resolution, schema_version=version)
+
+            try:
+                self.get_asset_file_size(feature_asset)
+                yield feature_asset
+
+            except AssetNotFoundError:
+                logger.debug("No feature store partition found for timestamp.", asset=feature_asset)
+                continue
 
     async def repartition(
         self,
