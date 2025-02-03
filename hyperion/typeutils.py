@@ -1,11 +1,14 @@
+import datetime
 from collections.abc import Sequence
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 T = TypeVar("T")
+
+DateOrDelta: TypeAlias = datetime.datetime | datetime.timedelta
 
 
 def assert_type(variable: Any, assertion: type[T]) -> T:
