@@ -232,3 +232,7 @@ def get_date_pattern(date: datetime.datetime, unit: TimeResolutionUnit) -> str:
         case "y":
             return truncated.strftime("%Y")
     raise ValueError(f"Unsupported time unit {unit!r}.")
+
+
+def utcnow() -> datetime.datetime:
+    return datetime.datetime.now(tz=datetime.timezone.utc)
