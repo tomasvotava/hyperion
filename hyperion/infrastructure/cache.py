@@ -1,6 +1,5 @@
 """A serverless cache for our shenanigans."""
 
-import datetime
 import hashlib
 import tempfile
 import time
@@ -14,6 +13,7 @@ import snappy
 
 from hyperion.catalog import AssetNotFoundError, Catalog
 from hyperion.config import storage_config
+from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import PersistentStoreAsset
 from hyperion.logging import get_logger
 
@@ -307,7 +307,7 @@ class PersistentCache(Cache):
         if self._data is None:
             logger.warning("Persistent cache has not yet been retrieved, no data written.", asset=self.asset)
             return None
-        timestamp = datetime.datetime.now(tz=datetime.timezone.utc)
+        timestamp = utcnow()
         data = ({"key": key, "value": value, "timestamp": timestamp} for key, value in self._data.items())
         self.catalog.store_asset(self.asset, data)
 

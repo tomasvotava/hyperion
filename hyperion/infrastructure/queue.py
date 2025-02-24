@@ -12,6 +12,7 @@ from boto3 import client
 from pydantic import BaseModel, Field
 
 from hyperion.config import config, queue_config
+from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import DataLakeAsset
 from hyperion.logging import get_logger
 
@@ -35,7 +36,7 @@ class Message(BaseModel):
             msg.receipt_handle = receipt_handle
         return msg
 
-    created: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(tz=datetime.timezone.utc))
+    created: datetime.datetime = Field(default_factory=utcnow)
     sender: str = config.service_name
     receipt_handle: str | None = None
 

@@ -25,6 +25,7 @@ from hyperion.dateutils import (
     iter_dates_between,
     quantize_datetime,
     truncate_datetime,
+    utcnow,
 )
 from hyperion.entities.catalog import (
     AssetProtocol,
@@ -297,7 +298,7 @@ class Catalog:
         tolerance: int = 0,
     ) -> Iterator[dict[str, Any]]:
         resolution = resolution if isinstance(resolution, TimeResolution) else TimeResolution.from_str(resolution)
-        the_now = the_now or datetime.datetime.now(tz=datetime.timezone.utc)
+        the_now = the_now or utcnow()
         try_timestamps = [the_now - resolution.delta * i for i in range(0, tolerance + 1)]
         for timestamp in try_timestamps:
             feature_partition_date = quantize_datetime(timestamp, resolution)
