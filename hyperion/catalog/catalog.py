@@ -302,7 +302,6 @@ class Catalog:
         try_timestamps = [the_now - resolution.delta * i for i in range(0, tolerance + 1)]
         for timestamp in try_timestamps:
             feature_partition_date = quantize_datetime(timestamp, resolution)
-            logger.warning("Timestamps", timestamp=timestamp, feature_timestamp=feature_partition_date)
             feature_asset = FeatureAsset(name, feature_partition_date, resolution)
             logger.debug(
                 f"Trying to find feature data for feature {feature_asset.feature_name!r}.", feature_asset=feature_asset
