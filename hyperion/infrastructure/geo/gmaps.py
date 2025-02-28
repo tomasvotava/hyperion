@@ -2,7 +2,7 @@
 
 import json
 from contextlib import ExitStack
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, ClassVar
 
 import googlemaps
@@ -10,12 +10,25 @@ import googlemaps
 from hyperion.config import geo_config
 from hyperion.entities.catalog import PersistentStoreAsset
 from hyperion.infrastructure.cache import PersistentCache
-from hyperion.infrastructure.geo.location import Location
+from hyperion.infrastructure.geo.location import Location, NamedLocation
 from hyperion.logging import get_logger
 
 logger = get_logger("gmaps")
 
 cache_asset = PersistentStoreAsset("GEOCodeCache", schema_version=1)
+
+
+def _find_info_by_type(components: list[dict[str, Any]], info_type: str) -> str | None:
+    for component in components:
+        if not isinstance((component_types := component.get("types")), list):
+            raise TypeError(f"Unexpected component type info, expected 'list', got {type(component_types)!r}.")
+        for component_type in component_types:
+            if component_type == info_type:
+                value = component.get("long_name", component.get("short_name"))
+                if value is None or isinstance(value, str):
+                    return value
+                raise TypeError(f"Unexpected value type, expected 'str' or None, got {type(value)!r}.")
+    return None
 
 
 class GoogleMaps:
@@ -75,3 +88,37 @@ class GoogleMaps:
         logger.debug("Found geocoded information on address.", address=address, location=location)
         self.geocode_cache.set(address, json.dumps(asdict(location)))
         return location
+
+    def reverse_geocode(self, location: Location, language: str | None = None) -> NamedLocation:
+        """Reverse geocode a location into an address.
+
+        Args:
+            location (Location): The location coordinates.
+            language (str, optional): The language in which to return results. Defaults
+                to None.
+
+        Returns:
+            str: The address name.
+        """
+        results = self.client.reverse_geocode({"lat": location.latitude, "lng": location.longitude}, language=language)
+        if not results or not isinstance(results, list):
+            raise ValueError(f"Could not reverse-geocode provided location - no results. {location!r}")
+        result = results[0]
+        if not isinstance(result, dict):
+            raise TypeError(f"Unexpected result type, expected 'dict', got {type(result)!r}.")
+        if not isinstance(address_components := result.get("address_components"), list):
+            raise TypeError(f"Unexpected address components type, expected 'dict', got {type(address_components)!r}.")
+        title = _find_info_by_type(address_components, "route")
+        return NamedLocation(
+            location=replace(
+                location, address=result.get("formatted_address") or location.address, title=title or location.title
+            ),
+            route=title,
+            neighborhood=_find_info_by_type(address_components, "neighborhood"),
+            sublocality=_find_info_by_type(address_components, "sublocality")
+            or _find_info_by_type(address_components, "sublocality_level_1"),
+            administrative_area=_find_info_by_type(address_components, "administrative_area_level_1"),
+            administrative_area_level_2=_find_info_by_type(address_components, "administrative_area_level_2"),
+            country=_find_info_by_type(address_components, "country"),
+            address=result.get("formatted_address"),
+        )

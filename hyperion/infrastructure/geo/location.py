@@ -172,3 +172,15 @@ class Location:
             raise ValueError(f"None of the given locations is close enough to {self!r}.")
         logger.debug("Found nearest location.", this=self, other=nearest[0], distance=nearest[1])
         return nearest[0]
+
+
+@dataclass(frozen=True, eq=True)
+class NamedLocation:
+    location: Location
+    route: str | None = None
+    neighborhood: str | None = None
+    sublocality: str | None = None
+    administrative_area: str | None = None
+    administrative_area_level_2: str | None = None
+    country: str | None = None
+    address: str | None = None
