@@ -16,6 +16,66 @@ A headless ETL / ELT / data pipeline and integration SDK for Python.
 - **Asynchronous Processing**: Utilities for async operations and task queues
 - **Geo Utilities**: Location-based services with Google Maps integration
 
+## Core Concepts
+
+### Assets
+
+Assets are the fundamental units of data in Hyperion. Each asset represents a dataset stored in a specific location with a defined schema. Hyperion supports three types of assets:
+
+#### DataLakeAsset
+
+- Represents raw, immutable data stored in a data lake
+- Time-partitioned by date
+- Each partition has a schema version
+- Example use cases: raw API responses, event logs, or any source data that needs to be preserved in its original form
+
+#### FeatureAsset
+
+- Represents processed feature data with time resolution
+- Used for analytics, machine learning features, and derived datasets
+- Supports different time resolutions (seconds, minutes, hours, days, weeks, months, years)
+- Can include additional partition keys for finer-grained organization
+- Example use cases: aggregated metrics, processed signals, ML features
+
+#### PersistentStoreAsset
+
+- Represents persistent data storage without time partitioning
+- Used for reference data, lookup tables, or any data that doesn't change frequently
+- Example use cases: reference data, configuration settings, master data
+
+### Schema Management
+
+All assets in Hyperion have associated schemas that define their structure:
+
+- **Schema Store**: The SchemaStore manages asset schemas in Avro format
+- **Schema Validation**: All data is validated against its schema during storage
+- **Schema Versioning**: Assets include a schema version to support evolution over time
+- **Schema Storage**: Schemas can be stored in the local filesystem or S3
+
+If a schema is missing for an asset:
+
+1. An error will be raised when attempting to store or retrieve the asset
+2. You need to define the schema in Avro format and store it in the schema store
+3. The schema should be named according to the pattern: `{asset_type}/{asset_name}.v{version}.avro.json`
+
+### Catalog
+
+The Catalog is the central component that manages asset storage and retrieval:
+
+- **Storage Location**: Maps asset types to their appropriate storage buckets
+- **Asset Retrieval**: Provides methods to retrieve assets by name, date, and schema version
+- **Partitioning**: Handles partitioning logic for different asset types
+- **Notifications**: Can send notifications when new assets arrive
+
+### Source Framework
+
+Sources are responsible for extracting data from external systems and storing it in the catalog:
+
+- **Standardized Interface**: All sources implement a common interface
+- **AWS Lambda Support**: Easy integration with AWS Lambda for scheduled extraction
+- **Backfill Capability**: Support for historical data backfill
+- **Incremental Processing**: Extract data with date-based filtering
+
 ## Installation
 
 Hyperion uses [Poetry](https://python-poetry.org/) for dependency management:
@@ -60,9 +120,14 @@ HYPERION_HTTP_PROXY_HTTPS=http://proxy:8080
 HYPERION_GEO_GMAPS_API_KEY=your-google-maps-api-key
 ```
 
-## Basic Usage
+Before any real documentation is written, you can check the
+[`hyperion/config.py`](hyperion/config.py) file for all available configuration options. Hyperion is using [`EnvProxy`](https://github.com/tomasvotava/env-proxy) for configuration.
 
-### Creating and Storing Assets
+## Usage Examples
+
+### Working with Assets
+
+#### Creating and Storing a DataLakeAsset
 
 ```python
 from hyperion.catalog import Catalog
@@ -74,40 +139,89 @@ catalog = Catalog.from_config()
 
 # Create a data lake asset
 asset = DataLakeAsset(
-    name="my-data",
+    name="customer_data",
     date=datetime.now(timezone.utc),
     schema_version=1
 )
 
 # Store data in the asset
 data = [
-    {"id": 1, "name": "Item 1", "timestamp": datetime.now(timezone.utc)},
-    {"id": 2, "name": "Item 2", "timestamp": datetime.now(timezone.utc)},
+    {"id": 1, "name": "Customer 1", "timestamp": datetime.now(timezone.utc)},
+    {"id": 2, "name": "Customer 2", "timestamp": datetime.now(timezone.utc)},
 ]
 
 catalog.store_asset(asset, data)
 ```
 
-### Retrieving Assets
+#### Working with FeatureAssets
 
 ```python
 from hyperion.catalog import Catalog
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.entities.catalog import FeatureAsset
+from hyperion.dateutils import TimeResolution
 from datetime import datetime, timezone
 
 # Initialize the catalog
 catalog = Catalog.from_config()
 
-# Create asset reference
-asset = DataLakeAsset(
-    name="my-data",
-    date=datetime.now(timezone.utc),
+# Create a feature asset with daily resolution
+resolution = TimeResolution(1, "d")  # 1 day resolution
+asset = FeatureAsset(
+    name="customer_activity",
+    partition_date=datetime.now(timezone.utc),
+    resolution=resolution,
     schema_version=1
 )
 
-# Retrieve data
-for item in catalog.retrieve_asset(asset):
-    print(item)
+# Store aggregated feature data
+feature_data = [
+    {"customer_id": 1, "activity_score": 87.5, "date": datetime.now(timezone.utc)},
+    {"customer_id": 2, "activity_score": 92.1, "date": datetime.now(timezone.utc)},
+]
+
+catalog.store_asset(asset, feature_data)
+
+# Retrieve feature data for a specific time period
+from_date = datetime(2023, 1, 1, tzinfo=timezone.utc)
+to_date = datetime(2023, 1, 31, tzinfo=timezone.utc)
+
+for feature_asset in catalog.iter_feature_store_partitions(
+    feature_name="customer_activity",
+    resolution="1d",  # Can use string format too
+    date_from=from_date,
+    date_to=to_date
+):
+    data = catalog.retrieve_asset(feature_asset)
+    for record in data:
+        print(record)
+```
+
+#### Working with PersistentStoreAssets
+
+```python
+from hyperion.catalog import Catalog
+from hyperion.entities.catalog import PersistentStoreAsset
+
+# Initialize the catalog
+catalog = Catalog.from_config()
+
+# Create a persistent store asset
+asset = PersistentStoreAsset(
+    name="product_catalog",
+    schema_version=1
+)
+
+# Store reference data
+products = [
+    {"id": "P001", "name": "Product 1", "category": "Electronics"},
+    {"id": "P002", "name": "Product 2", "category": "Clothing"},
+]
+
+catalog.store_asset(asset, products)
+
+# Retrieve reference data
+for product in catalog.retrieve_asset(asset):
+    print(product)
 ```
 
 ### Creating a Custom Source
@@ -150,6 +264,114 @@ def lambda_handler(event, context):
 # Use standalone
 if __name__ == "__main__":
     asyncio.run(MyCustomSource._run(Catalog.from_config()))
+```
+
+### Working with Schemas
+
+To create and register a schema for an asset:
+
+```python
+import json
+from pathlib import Path
+
+# Define schema in Avro format
+schema = {
+    "type": "record",
+    "name": "CustomerData",
+    "fields": [
+        {"name": "id", "type": "int"},
+        {"name": "name", "type": "string"},
+        {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+    ]
+}
+
+# Save schema to local file
+schema_path = Path("schemas/data_lake/customer_data.v1.avro.json")
+schema_path.parent.mkdir(parents=True, exist_ok=True)
+with open(schema_path, "w") as f:
+    json.dump(schema, f)
+
+# Or upload to S3 if using S3SchemaStore
+import boto3
+s3_client = boto3.client('s3')
+s3_client.put_object(
+    Bucket="my-schema-bucket",
+    Key="data_lake/customer_data.v1.avro.json",
+    Body=json.dumps(schema)
+)
+```
+
+## Advanced Features
+
+### Repartitioning Data
+
+```python
+from hyperion.catalog import Catalog
+from hyperion.entities.catalog import DataLakeAsset
+from hyperion.dateutils import TimeResolutionUnit
+from datetime import datetime, timezone
+import asyncio
+
+async def repartition_data():
+    catalog = Catalog.from_config()
+
+    # Original asset with day-level partitioning
+    asset = DataLakeAsset(
+        name="web_logs",
+        date=datetime.now(timezone.utc),
+        schema_version=1
+    )
+
+    # Repartition by hour
+    await catalog.repartition(
+        asset,
+        granularity=TimeResolutionUnit("h"),
+        date_attribute="timestamp"
+    )
+
+asyncio.run(repartition_data())
+```
+
+### Caching
+
+```python
+from hyperion.infrastructure.cache import Cache
+
+# Get cache from configuration
+cache = Cache.from_config()
+
+# Store data in cache
+cache.set("my-key", "my-value")
+
+# Retrieve data from cache
+value = cache.get("my-key")
+print(value)  # "my-value"
+
+# Check if key exists
+if cache.hit("my-key"):
+    print("Cache hit!")
+
+# Delete key
+cache.delete("my-key")
+```
+
+### Geo Utilities
+
+```python
+from hyperion.infrastructure.geo import GoogleMaps, Location
+
+# Initialize Google Maps client
+gmaps = GoogleMaps.from_config()
+
+# Geocode an address
+with gmaps:
+    location = gmaps.geocode("1600 Amphitheatre Parkway, Mountain View, CA")
+    print(f"Latitude: {location.latitude}, Longitude: {location.longitude}")
+
+    # Reverse geocode a location
+    named_location = gmaps.reverse_geocode(location)
+    print(f"Address: {named_location.address}")
+    print(f"Country: {named_location.country}")
 ```
 
 ## Development
