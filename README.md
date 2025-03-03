@@ -21,9 +21,6 @@ A headless ETL / ELT / data pipeline and integration SDK for Python.
 Hyperion uses [Poetry](https://python-poetry.org/) for dependency management:
 
 ```bash
-# Install poetry if you don't have it
-curl -sSL https://install.python-poetry.org | python3 -
-
 # Clone the repository
 git clone https://github.com/tomasvotava/hyperion.git
 cd hyperion
