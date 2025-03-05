@@ -422,6 +422,9 @@ class Catalog:
             version = int(match.group("version"))
             partition_date_str = partition.split("date=")[1]
             partition_date = datetime.datetime.fromisoformat(partition_date_str)
+            logger.debug(
+                "Found data lake partition.", asset_name=asset_name, partition_date=partition_date, version=version
+            )
             yield DataLakeAsset(asset_name, assure_timezone(partition_date), version)
 
     def find_latest_datalake_partition(self, asset_name: str, date_part: str | None = None) -> DataLakeAsset:
@@ -485,6 +488,7 @@ class Catalog:
 
             try:
                 self.get_asset_file_size(feature_asset)
+                logger.debug("Found partition for the feature.", asset=feature_asset)
                 yield feature_asset
 
             except AssetNotFoundError:
