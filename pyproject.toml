@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hyperion"
-version = "0.1.0.post12"
+version = "0.0.1"
 description = "A headless ETL / ELT / data pipeline and integration SDK for Python."
 authors = ["Tomas Votava <info@tomasvotava.eu>"]
 readme = "README.md"
@@ -35,6 +35,7 @@ types-python-dateutil = "^2.9.0.20241003"
 pytest-asyncio = "^0.24.0"
 moto = { extras = ["server"], version = "^5.0.22" }
 typing-extensions = { version = "^4.12.2", python = "<3.11" }
+commitizen = "^4.4.1"
 
 [build-system]
 requires = ["poetry-core"]
@@ -88,3 +89,11 @@ strict = true
 [[tool.mypy.overrides]]
 module = ["snappy.*", "googlemaps.*", "aioboto3.*", "haversine.*"]
 ignore_missing_imports = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver"
+version_provider = "poetry"
+update_changelog_on_bump = true
+major_version_zero = true
