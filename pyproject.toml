@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hyperion"
-version = "0.0.1"
+version = "0.1.0"
 description = "A headless ETL / ELT / data pipeline and integration SDK for Python."
 authors = ["Tomas Votava <info@tomasvotava.eu>"]
 readme = "README.md"
@@ -97,3 +97,4 @@ version_scheme = "semver"
 version_provider = "poetry"
 update_changelog_on_bump = true
 major_version_zero = true
+changelog_incremental = true
