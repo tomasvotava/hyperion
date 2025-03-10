@@ -1,0 +1,45 @@
+name: Create Release
+
+on:
+  pull_request:
+    branches:
+      - master
+    types:
+      - closed
+
+jobs:
+  create-release:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install-all
+        with:
+          python-version: "3.12"
+
+      - name: Get Current Version
+        id: get_version
+        run: |
+          VERSION=$(poetry version --short)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and Push Tag
+        run: |
+          git tag "${{steps.get_version.outputs.version}}"
+          git push origin "${{steps.get_version.outputs.version}}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{steps.get_version.outputs.version}}"
+          name: "Release ${{steps.get_version.outputs.version}}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
