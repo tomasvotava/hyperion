@@ -432,14 +432,7 @@ The project uses:
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Run tests: `poetry run pytest`
-5. Run pre-commit hooks: `poetry run pre-commit run -a`
-6. Commit your changes using [Conventional Commits](https://www.conventionalcommits.org/)
-7. Push to your branch: `git push origin feature/my-feature`
-8. Create a Pull Request
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines on contributing to this project.
 
 ## License
 
