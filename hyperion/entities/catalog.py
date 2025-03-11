@@ -3,6 +3,8 @@ import json
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal, Protocol
 
+from pydantic import BaseModel
+
 from hyperion.dateutils import TimeResolution, assure_timezone
 
 AssetType = Literal["data_lake", "feature", "persistent_store"]
@@ -174,3 +176,15 @@ class FeatureAsset:
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.get_path()!r})"
+
+
+class FeatureModel(BaseModel):
+    """A base class for feature models.
+
+    You may use this base class (along with pydantic's BaseModel) to define type-safe feature models.
+    Use with "AssetCollection" to make powerful typed feature collections.
+    """
+
+    asset_name: ClassVar[str] = NotImplemented
+    resolution: ClassVar[TimeResolution] = NotImplemented
+    schema_version: ClassVar[int] = 1
