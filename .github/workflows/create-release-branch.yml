@@ -46,8 +46,7 @@ jobs:
       - name: Run Commitizen Bump
         if: steps.check_version.outputs.version_found == 'true'
         run: |
-          poetry run cz bump
-          git push origin "release/${{ steps.check_version.outputs.version }}"
+          poetry run cz bump --yes
 
       - name: Create Pull Request
         if: steps.check_version.outputs.version_found == 'true'
