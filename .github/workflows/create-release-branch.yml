@@ -56,7 +56,7 @@ jobs:
       - name: Get Next Version
         id: check_version
         run: |
-          VERSION=$(poetry run cz bump --get-next 2>/dev/null || echo "fail")
+          VERSION=$(poetry run cz bump --get-next 2>&1 || echo "fail")
 
           if [[ "$VERSION" == "fail" || "$VERSION" == *"error"* || "$VERSION" == *"Traceback"* || -z "$VERSION" ]]; then
             echo "version_found=false" >> "$GITHUB_OUTPUT"
@@ -71,17 +71,7 @@ jobs:
         run: |
           poetry run cz bump --yes
 
-      - name: Check if version bump changed files
-        id: check_diff
-        run: |
-          if git diff --quiet; then
-            echo "no_changes=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no_changes=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create Pull Request
-        if: steps.check_version.outputs.version_found == 'true' && steps.check_diff.outputs.no_changes == 'false'
         uses: peter-evans/create-pull-request@v6
         with:
           branch: "release/${{ steps.check_version.outputs.version }}"
