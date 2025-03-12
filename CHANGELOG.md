@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 (2025-03-12)
+
+### Feat
+
+- Add `AssetCollection` and `FeatureFetchSpecifier` functionality
+- Add `FeatureModel` base class for type-safe feature models
+
 ## 0.1.0 (2025-03-05)
 
 ### Feat
