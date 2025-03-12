@@ -38,11 +38,6 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "version_found=true" >> $GITHUB_OUTPUT
 
-      - name: Create Release Branch
-        if: steps.check_version.outputs.version_found == 'true'
-        run: |
-          git checkout -b "release/${{ steps.check_version.outputs.version }}"
-
       - name: Run Commitizen Bump
         if: steps.check_version.outputs.version_found == 'true'
         run: |
