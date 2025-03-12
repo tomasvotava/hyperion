@@ -1,0 +1,63 @@
+name: Publish Development Prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_github_release:
+        description: 'Create GitHub prerelease'
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  build-and-publish-dev:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: ./.github/actions/install-all
+        with:
+          python-version: "3.12"
+
+      - name: Get current version and create dev version
+        id: version
+        run: |
+          CURRENT_VERSION=$(poetry version --short)
+          TIMESTAMP=$(date +%s)
+          DEV_VERSION="${CURRENT_VERSION}.dev${TIMESTAMP}"
+          echo "Current version: $CURRENT_VERSION"
+          echo "Development version: $DEV_VERSION"
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "dev_version=$DEV_VERSION" >> $GITHUB_OUTPUT
+          poetry version $DEV_VERSION
+
+      - name: Build package
+        run: poetry build
+
+      - name: Create GitHub prerelease
+        if: ${{ github.event.inputs.create_github_release == 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/hyperion_sdk-${{ steps.version.outputs.dev_version }}.tar.gz
+            dist/hyperion_sdk-${{ steps.version.outputs.dev_version }}-py3-none-any.whl
+          tag_name: v${{ steps.version.outputs.dev_version }}
+          name: Development Release v${{ steps.version.outputs.dev_version }}
+          prerelease: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
