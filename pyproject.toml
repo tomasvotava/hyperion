@@ -10,31 +10,31 @@ packages = [{ include = "hyperion" }]
 [tool.poetry.dependencies]
 python = ">=3.10,<3.13"
 loguru = "^0.7.2"
-fastavro = "^1.9.7"
+fastavro = "^1.10.0"
 boto3 = "^1.35.36"
 env-proxy = "^1.1.0"
 python-dotenv = "^1.0.1"
 python-snappy = "^0.7.3"
 googlemaps = "^4.10.0"
-cachetools = "^5.5.0"
+cachetools = "^5.5.2"
 python-dateutil = "^2.9.0.post0"
-pydantic = "^2.10.2"
+pydantic = "^2.10.6"
 aws-lambda-typing = "^2.20.0"
 aioboto3 = "^13.2.0"
 haversine = "^2.9.0"
-numpy = "^2.2.0"
+numpy = "^2.2.3"
 httpx = "^0.28.1"
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.7.3"
-mypy = "^1.13.0"
-pytest = "^8.3.3"
+ruff = "^0.9.10"
+mypy = "^1.15.0"
+pytest = "^8.3.5"
 pytest-cov = "^6.0.0"
-boto3-stubs = "^1.35.59"
+boto3-stubs = "^1.37.11"
 types-cachetools = "^5.5.0.20240820"
 types-python-dateutil = "^2.9.0.20241003"
-pytest-asyncio = "^0.24.0"
-moto = { extras = ["server"], version = "^5.0.22" }
+pytest-asyncio = "^0.25.3"
+moto = { extras = ["server"], version = "^5.1.1" }
 typing-extensions = { version = "^4.12.2", python = "<3.11" }
 commitizen = "^4.4.1"
 
