@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from hyperion.config import storage_config
 from hyperion.entities.catalog import AssetProtocol, AssetType
 from hyperion.infrastructure.aws import S3Client
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 logger = get_logger("schema-store")
 

@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import httpx
 
 from hyperion.config import http_config
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 logger = get_logger("hyperion-http")
 

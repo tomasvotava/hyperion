@@ -15,7 +15,7 @@ from hyperion.catalog import AssetNotFoundError, Catalog
 from hyperion.config import storage_config
 from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import PersistentStoreAsset
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 DEFAULT_TTL_SECONDS = 60
 DYNAMODB_MAX_LENGTH = 65535

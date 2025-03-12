@@ -36,7 +36,7 @@ class WeatherFeature(FeatureModel, BaseModel):
 Define a collection class that declares what feature data you need:
 
 ```python
-from hyperion.collections.asset_collection import AssetCollection, FeatureFetchSpecifier
+from hyperion.repository.asset_collection import AssetCollection, FeatureFetchSpecifier
 import datetime
 
 class WeatherDataCollection(AssetCollection):

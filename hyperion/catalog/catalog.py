@@ -35,8 +35,8 @@ from hyperion.entities.catalog import (
     get_prefixed_path,
 )
 from hyperion.infrastructure.aws import S3Client
-from hyperion.infrastructure.queue import ArrivalEvent, DataLakeArrivalMessage, Queue
-from hyperion.logging import get_logger
+from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage, Queue
+from hyperion.log import get_logger
 
 __all__ = ["AssetNotFoundError", "Catalog", "CatalogError"]
 

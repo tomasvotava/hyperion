@@ -7,15 +7,15 @@ from pydantic import BaseModel
 
 from hyperion import dateutils
 from hyperion.catalog.catalog import Catalog
-from hyperion.collections.asset_collection import (
+from hyperion.dateutils import TimeResolution, iter_dates_between
+from hyperion.entities.catalog import FeatureAsset, FeatureModel
+from hyperion.repository.asset_collection import (
     AssetCollection,
     FeatureAssetSpecification,
     FeatureFetchSpecifier,
     _CollectionState,
     _FeatureFetchSpecifier,
 )
-from hyperion.dateutils import TimeResolution, iter_dates_between
-from hyperion.entities.catalog import FeatureAsset, FeatureModel
 from hyperion.typeutils import DateOrDelta
 
 THE_NOW = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
@@ -50,7 +50,7 @@ class MockFeature(FeatureModel, BaseModel):
 @pytest.fixture(scope="module", autouse=True)
 def _deterministic_utcnow() -> Iterator[None]:
     monkeypatch = pytest.MonkeyPatch().context()
-    utcnow_occurences = ("hyperion.dateutils.utcnow", "hyperion.collections.asset_collection.utcnow")
+    utcnow_occurences = ("hyperion.dateutils.utcnow", "hyperion.repository.asset_collection.utcnow")
     with monkeypatch as mp:
         for name in utcnow_occurences:
             mp.setattr(name, lambda: THE_NOW)

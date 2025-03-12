@@ -15,7 +15,7 @@ import boto3
 import botocore.exceptions
 
 from hyperion.config import storage_config
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 PathOrIOBinary = str | Path | BinaryIO | IO[bytes]
 
