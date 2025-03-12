@@ -303,6 +303,12 @@ s3_client.put_object(
 
 ## Advanced Features
 
+### Asset Collections
+
+Asset collections provide a high-level interface for fetching and working with groups of assets. You can define a collection class that specifies the assets you need and fetch them all at once.
+
+See [`docs/asset_collections.md`](docs/asset_collections.md) for more information.
+
 ### Repartitioning Data
 
 ```python
