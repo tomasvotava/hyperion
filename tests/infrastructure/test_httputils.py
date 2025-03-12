@@ -1,6 +1,6 @@
 import pytest
 
-from hyperion.infrastructure.http import redact_url
+from hyperion.infrastructure.httputils import redact_url
 
 
 @pytest.mark.parametrize(

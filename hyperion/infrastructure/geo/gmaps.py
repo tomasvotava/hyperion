@@ -11,7 +11,7 @@ from hyperion.config import geo_config
 from hyperion.entities.catalog import PersistentStoreAsset
 from hyperion.infrastructure.cache import PersistentCache
 from hyperion.infrastructure.geo.location import Location, NamedLocation
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 logger = get_logger("gmaps")
 

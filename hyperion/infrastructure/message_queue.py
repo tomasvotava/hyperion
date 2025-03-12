@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from hyperion.config import config, queue_config
 from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import DataLakeAsset
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 logger = get_logger("hyperion-queue")
 

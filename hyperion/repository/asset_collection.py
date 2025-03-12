@@ -12,7 +12,7 @@ from hyperion.asyncutils import iter_async
 from hyperion.catalog import Catalog
 from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import FeatureAsset, FeatureModel
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 from hyperion.typeutils import DateOrDelta
 
 logger = get_logger("hyperion-model-specification")

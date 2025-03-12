@@ -6,7 +6,7 @@ from typing import Literal, TypeAlias, cast
 
 from dateutil.relativedelta import relativedelta
 
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 TIME_UNITS = ["s", "m", "h", "d", "w", "M", "y"]
 PATT_TIME_RESOLUTION = re.compile(rf"(?P<value>\d+)(?P<unit>[{''.join(TIME_UNITS)}])")

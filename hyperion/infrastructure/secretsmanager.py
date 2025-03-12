@@ -6,7 +6,7 @@ from typing import cast
 import boto3
 
 from hyperion.config import secrets_config
-from hyperion.logging import get_logger
+from hyperion.log import get_logger
 
 logger = get_logger("hyperion-secrets")
 

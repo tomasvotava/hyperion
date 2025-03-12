@@ -14,8 +14,8 @@ from hyperion.asyncutils import AsyncTaskQueue, get_loop
 from hyperion.catalog import Catalog
 from hyperion.config import storage_config
 from hyperion.entities.catalog import DataLakeAsset
-from hyperion.infrastructure.queue import SourceBackfillMessage, SQSQueue, iter_messages_from_sqs_event
-from hyperion.logging import get_logger
+from hyperion.infrastructure.message_queue import SourceBackfillMessage, SQSQueue, iter_messages_from_sqs_event
+from hyperion.log import get_logger
 
 SourceEventType = EventBridgeEvent | SQSEvent
 
