@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 (2025-03-12)
+
+### BREAKING CHANGE
+
+- `hyperion.logging` renamed to `hyperion.log`
+- `hyperion.infrastructure.queue` renamed to `hyperion.infrastructure.message_queue`
+- `hyperion.infrastructure.secrets` renamed to `hyperion.infrastructure.secretsmanager`
+- `hyperion.infrastructure.http` renamed to `hyperion.infrastructure.httputils`
+- `hyperion.collections` moved to `hyperion.repository`
+
+### Fix
+
+- **ci**: remove check for changed files after cz bump that in fact blocks release
+
+### Refactor
+
+- update import paths for logging and asset collection modules
+
 ## 0.2.0 (2025-03-12)
 
 ### Feat
