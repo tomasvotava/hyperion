@@ -11,6 +11,9 @@ on:
 
 jobs:
   build-and-publish-dev:
+    environment:
+      name: pypi
+      url: https://pypi.org/p/hyperion-sdk
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -46,6 +49,9 @@ jobs:
       - name: Build package
         run: poetry build
 
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
       - name: Create GitHub prerelease
         if: ${{ github.event.inputs.create_github_release == 'true' }}
         uses: softprops/action-gh-release@v2
@@ -58,6 +64,3 @@ jobs:
           prerelease: true
           token: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
