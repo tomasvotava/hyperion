@@ -73,6 +73,7 @@ jobs:
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
+        if: steps.check_version.outputs.version_found == 'true'
         with:
           branch: "release/${{ steps.check_version.outputs.version }}"
           title: "Release ${{ steps.check_version.outputs.version }}"
