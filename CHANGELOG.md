@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 (2025-03-13)
+
+### Feat
+
+- add method `get_altitude` to retrieve altitude using Google Maps Elevation API
+
 ## 0.4.0 (2025-03-13)
 
 ### Feat
