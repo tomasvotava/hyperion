@@ -122,3 +122,19 @@ class GoogleMaps:
             country=_find_info_by_type(address_components, "country"),
             address=result.get("formatted_address"),
         )
+
+    def get_altitude(self, location: Location) -> float:
+        """Get altitude of the given location using Elevation API.
+
+        Args:
+            location (Location): The location coordinates.
+
+        Returns:
+            float: The altitude in meters above sea level
+        """
+        result = self.client.elevation((location.latitude, location.longitude))
+        if not result:
+            raise ValueError(f"No elevation data found for location {location!r}.")
+        if not isinstance(result[0], dict) or "elevation" not in result[0]:
+            raise ValueError("Unexpected data returned by the Google Maps Elevation API.")
+        return float(result[0]["elevation"])
