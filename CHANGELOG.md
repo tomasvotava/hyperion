@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 (2025-03-13)
+
+### Feat
+
+- add support for python 3.13
+
+### Fix
+
+- remove unnecessary 'v' prefix from version tags in release workflows
+
 ## 0.3.0 (2025-03-12)
 
 ### BREAKING CHANGE
