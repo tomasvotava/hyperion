@@ -5,6 +5,9 @@ A headless ETL / ELT / data pipeline and integration SDK for Python.
 [![pre-commit](https://github.com/tomasvotava/hyperion/actions/workflows/pre-commit.yml/badge.svg?branch=master)](https://github.com/tomasvotava/hyperion/actions/workflows/pre-commit.yml)
 [![pytest](https://github.com/tomasvotava/hyperion/actions/workflows/pytest.yml/badge.svg?branch=master)](https://github.com/tomasvotava/hyperion/actions/workflows/pytest.yml)
 [![codecov](https://codecov.io/gh/tomasvotava/hyperion/branch/master/graph/badge.svg?token=your-token)](https://codecov.io/gh/tomasvotava/hyperion)
+![PyPI - License](https://img.shields.io/pypi/l/hyperion-sdk)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/hyperion-sdk)
+![GitHub Release](https://img.shields.io/github/v/release/tomasvotava/hyperion)
 
 ## Features
 
