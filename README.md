@@ -78,6 +78,21 @@ Sources are responsible for extracting data from external systems and storing it
 
 ## Installation
 
+### From PyPI
+
+If you only want to use `hyperion`, you can install it from PyPI:
+
+```bash
+pip install hyperion-etl
+# or
+poetry add hyperion-etl
+```
+
+We'll try to respect [Semantic Versioning](https://semver.org/), so you can pin your dependencies to a specific version,
+or use a version selector to make sure no breaking changes are introduced (e.g., `^0.4.0`).
+
+### From Source
+
 Hyperion uses [Poetry](https://python-poetry.org/) for dependency management:
 
 ```bash
