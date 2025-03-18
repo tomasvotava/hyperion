@@ -47,7 +47,7 @@ class FeatureAssetSpecification(Generic[CClass]):
 
     def resolve_start_date(self, the_now: datetime.datetime | None = None) -> datetime.datetime:
         """Resolve the start date for fetching the feature asset data."""
-        return self._resolve_date(self.start_date, datetime.datetime.min, the_now)
+        return self._resolve_date(self.start_date, datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), the_now)
 
     def resolve_end_date(self, the_now: datetime.datetime | None = None) -> datetime.datetime:
         """Resolve the end date for fetching the feature asset data."""
