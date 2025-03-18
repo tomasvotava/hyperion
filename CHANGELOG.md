@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 (2025-03-18)
+
+### Fix
+
+- ensure start date is timezone-aware in asset collection methods
+
 ## 0.5.0 (2025-03-13)
 
 ### Feat
