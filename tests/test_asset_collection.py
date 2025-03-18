@@ -63,7 +63,7 @@ class TestAssetCollection:
     @pytest.mark.parametrize(
         ("start_date", "end_date", "expected_start_date", "expected_end_date"),
         [
-            (None, None, datetime.datetime.min, THE_NOW),
+            (None, None, datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), THE_NOW),
             (
                 datetime.timedelta(days=-1),
                 datetime.timedelta(days=1),
