@@ -3,6 +3,9 @@ import json
 from dataclasses import dataclass, field
 from typing import ClassVar, Literal, Protocol
 
+import pandera.polars as pa
+import polars
+import polars.datatypes
 from pydantic import BaseModel
 
 from hyperion.dateutils import TimeResolution, assure_timezone
@@ -188,3 +191,13 @@ class FeatureModel(BaseModel):
     asset_name: ClassVar[str] = NotImplemented
     resolution: ClassVar[TimeResolution] = NotImplemented
     schema_version: ClassVar[int] = 1
+
+
+class PolarsFeatureModel(pa.DataFrameModel):
+    _asset_name: ClassVar[str] = NotImplemented
+    _resolution: ClassVar[TimeResolution] = NotImplemented
+    _schema_version: ClassVar[int] = 1
+
+    @classmethod
+    def to_polars_schema_definition(cls) -> dict[str, polars.datatypes.DataType]:
+        return {field.name: field.dtype.to_polars() for field in cls.to_schema().columns.values()}
