@@ -1,18 +1,22 @@
 import datetime
 from collections.abc import Iterator
-from typing import Any, ClassVar, cast
+from typing import Annotated, Any, ClassVar, cast
 
+import pandera.errors
+import pandera.typing as pt
 import pytest
+from pandera.engines.polars_engine import DateTime
 from pydantic import BaseModel
 
 from hyperion import dateutils
 from hyperion.catalog.catalog import Catalog
 from hyperion.dateutils import TimeResolution, iter_dates_between
-from hyperion.entities.catalog import FeatureAsset, FeatureModel
+from hyperion.entities.catalog import FeatureAsset, FeatureModel, PolarsFeatureModel
 from hyperion.repository.asset_collection import (
     AssetCollection,
     FeatureAssetSpecification,
     FeatureFetchSpecifier,
+    PolarsFeatureFetchSpecifier,
     _CollectionState,
     _FeatureFetchSpecifier,
 )
@@ -47,6 +51,46 @@ class MockFeature(FeatureModel, BaseModel):
     partition_date: datetime.datetime
 
 
+class PolarsMockFeature(PolarsFeatureModel):
+    _asset_name: ClassVar = "MockedAsset"
+    _resolution: ClassVar = TimeResolution(1, "d")
+    _schema_version: ClassVar = 1
+
+    partition_date: pt.Series[Annotated[DateTime, False, "UTC", "us"]]
+
+
+class PolarsMockFeatureInvalid(PolarsFeatureModel):
+    _asset_name: ClassVar = "MockedAsset"
+    _resolution: ClassVar = TimeResolution(1, "d")
+
+    partition_date: pt.Series[str]
+
+
+class MockCollection(AssetCollection):
+    catalog = cast(Catalog, _FakeCatalog())
+    mocks = FeatureFetchSpecifier(MockFeature, datetime.timedelta(days=-10), datetime.timedelta(days=10))
+
+
+class PolarsMockCollection(AssetCollection):
+    catalog = cast(Catalog, _FakeCatalog())
+    mocks = PolarsFeatureFetchSpecifier(PolarsMockFeature, datetime.timedelta(days=-10), datetime.timedelta(days=10))
+
+
+class PolarsMockCollectionInvalid(AssetCollection):
+    catalog = cast(Catalog, _FakeCatalog())
+    mocks = PolarsFeatureFetchSpecifier(
+        PolarsMockFeatureInvalid, datetime.timedelta(days=-10), datetime.timedelta(days=10)
+    )
+
+
+class MixedMockCollection(AssetCollection):
+    catalog = cast(Catalog, _FakeCatalog())
+    mocks_pydantic = FeatureFetchSpecifier(MockFeature, datetime.timedelta(days=-10), datetime.timedelta(days=10))
+    mocks_polars = PolarsFeatureFetchSpecifier(
+        PolarsMockFeature, datetime.timedelta(days=-10), datetime.timedelta(days=10)
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _deterministic_utcnow() -> Iterator[None]:
     monkeypatch = pytest.MonkeyPatch().context()
@@ -60,6 +104,7 @@ def _deterministic_utcnow() -> Iterator[None]:
 
 
 class TestAssetCollection:
+    @pytest.mark.parametrize("feature_cls", [MockFeature, PolarsMockFeature], ids=lambda cls: cls.__name__)
     @pytest.mark.parametrize(
         ("start_date", "end_date", "expected_start_date", "expected_end_date"),
         [
@@ -80,38 +125,39 @@ class TestAssetCollection:
     )
     def test_resolve_feature_asset_specification_dates(
         self,
+        feature_cls: type[MockFeature] | type[PolarsMockFeature],
         start_date: DateOrDelta | None,
         end_date: DateOrDelta | None,
         expected_start_date: datetime.datetime,
         expected_end_date: datetime.datetime,
     ) -> None:
-        specs = FeatureAssetSpecification(MockFeature, start_date, end_date)
+        specs = FeatureAssetSpecification(feature_cls, start_date, end_date)
         assert specs.resolve_start_date() == expected_start_date
         assert specs.resolve_end_date() == expected_end_date
 
-    def test_collection_fetch_registration(self) -> None:
-        class _MockCollection(AssetCollection):
-            mocks = FeatureFetchSpecifier(MockFeature, datetime.timedelta(days=-10), datetime.timedelta(days=10))
-
-        assert hasattr(_MockCollection, "_state"), "Collection should have _state after fields registration"
-        assert isinstance(state := _MockCollection._state, _CollectionState)
-        assert state.fetched is _MockCollection.is_fetched()
+    @pytest.mark.parametrize("collection", [MockCollection, PolarsMockCollection], ids=lambda cls: cls.__name__)
+    def test_collection_fetch_registration(self, collection: type[MockCollection] | type[PolarsMockCollection]) -> None:
+        assert hasattr(collection, "_state"), "Collection should have _state after fields registration"
+        assert isinstance(state := collection._state, _CollectionState)
+        assert state.fetched is collection.is_fetched()
         assert state.fetched is False
         assert isinstance(mocks_field := state.fetch_specifications["mocks"], FeatureAssetSpecification)
         assert mocks_field.resolve_start_date() == THE_NOW - datetime.timedelta(days=10)
         assert mocks_field.resolve_end_date() == THE_NOW + datetime.timedelta(days=10)
-        assert isinstance(descriptor := _MockCollection.__dict__["mocks"], _FeatureFetchSpecifier)
+        assert isinstance(descriptor := collection.__dict__["mocks"], _FeatureFetchSpecifier)
         assert descriptor.field_name == "mocks"
-        assert descriptor.owner is _MockCollection
+        assert descriptor.owner is collection
 
-    def test_descriptor_raises_before_fetch(self) -> None:
-        class _MockCollection(AssetCollection):
-            mocks = FeatureFetchSpecifier(MockFeature)
+    @pytest.mark.parametrize("collection", [MockCollection, PolarsMockCollection], ids=lambda cls: cls.__name__)
+    def test_descriptor_raises_before_fetch(
+        self, collection: type[MockCollection] | type[PolarsMockCollection]
+    ) -> None:
+        with pytest.raises(
+            RuntimeError, match="Owner collection '(MockCollection|PolarsMockCollection)' was not fetched yet."
+        ):
+            _ = collection().mocks
 
-        with pytest.raises(RuntimeError, match="Owner collection '_MockCollection' was not fetched yet."):
-            _ = _MockCollection().mocks
-
-    async def test_fetch_all(self) -> None:
+    async def test_fetch_all_pydantic(self) -> None:
         class _MockCollection(AssetCollection):
             catalog = cast(Catalog, _FakeCatalog())
             mocks = FeatureFetchSpecifier(MockFeature, datetime.timedelta(days=-10))
@@ -121,3 +167,27 @@ class TestAssetCollection:
         assert len(_MockCollection.mocks) == 11
         expected_dates = {THE_NOW - datetime.timedelta(days=d) for d in range(11)}
         assert {mock.partition_date for mock in _MockCollection.mocks} == expected_dates
+
+    async def test_fetch_all_polars(self) -> None:
+        class _MockCollection(AssetCollection):
+            catalog = cast(Catalog, _FakeCatalog())
+            mocks = PolarsFeatureFetchSpecifier(PolarsMockFeature, datetime.timedelta(days=-10))
+
+        await _MockCollection.fetch_all()
+        assert _MockCollection.is_fetched(), "is_fetched flag should be set after successful fetch"
+        assert len(_MockCollection.mocks.collect()) == 11
+        expected_dates = {THE_NOW - datetime.timedelta(days=d) for d in range(11)}
+        assert {mock for mock in _MockCollection.mocks.collect()["partition_date"]} == expected_dates
+
+    async def test_fetch_polars_invalid(self) -> None:
+        with pytest.raises(
+            pandera.errors.SchemaError, match="expected column 'partition_date' to have type String, got Datetime"
+        ):
+            await PolarsMockCollectionInvalid.fetch_all()
+
+    async def test_mixed_collection(self) -> None:
+        await MixedMockCollection.fetch_all()
+        assert len(MixedMockCollection.mocks_polars.collect()) == len(MixedMockCollection.mocks_pydantic)
+        assert list(MixedMockCollection.mocks_polars.collect()["partition_date"]) == list(
+            row.partition_date for row in MixedMockCollection.mocks_pydantic
+        )

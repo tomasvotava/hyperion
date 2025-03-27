@@ -4,21 +4,34 @@ and store data from the catalog in a type-safe manner.
 
 import asyncio
 import datetime
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, TypeVar, cast
 
+import pandera.typing.polars
+import polars
+
 from hyperion.asyncutils import iter_async
 from hyperion.catalog import Catalog
-from hyperion.dateutils import utcnow
-from hyperion.entities.catalog import FeatureAsset, FeatureModel
+from hyperion.dateutils import TimeResolution, utcnow
+from hyperion.entities.catalog import FeatureAsset, FeatureModel, PolarsFeatureModel
 from hyperion.log import get_logger
 from hyperion.typeutils import DateOrDelta
 
 logger = get_logger("hyperion-model-specification")
 
-CClass = TypeVar("CClass", bound=FeatureModel)
+CClass = TypeVar("CClass", bound=FeatureModel | PolarsFeatureModel)
+PydanticFeature = TypeVar("PydanticFeature", bound=FeatureModel)
+PolarsFeature = TypeVar("PolarsFeature", bound=PolarsFeatureModel)
 CollectionType = TypeVar("CollectionType", bound="AssetCollection")
+
+
+class UnsupportedFeatureTypeError(TypeError):
+    def __init__(self, feature: Any) -> None:
+        super().__init__(
+            f"Provided feature is of an unsupported type {type(feature)!r}, "
+            "expected 'FeatureModel' or 'PolarsFeatureModel'."
+        )
 
 
 @dataclass(frozen=True, eq=True)
@@ -52,6 +65,30 @@ class FeatureAssetSpecification(Generic[CClass]):
     def resolve_end_date(self, the_now: datetime.datetime | None = None) -> datetime.datetime:
         """Resolve the end date for fetching the feature asset data."""
         return self._resolve_date(self.end_date, utcnow(), the_now)
+
+    @property
+    def feature_name(self) -> str:
+        if issubclass(self.feature, FeatureModel):
+            return self.feature.asset_name
+        if issubclass(self.feature, PolarsFeatureModel):
+            return self.feature._asset_name
+        raise UnsupportedFeatureTypeError(self.feature)
+
+    @property
+    def feature_resolution(self) -> TimeResolution:
+        if issubclass(self.feature, FeatureModel):
+            return self.feature.resolution
+        if issubclass(self.feature, PolarsFeatureModel):
+            return self.feature._resolution
+        raise UnsupportedFeatureTypeError(self.feature)
+
+    @property
+    def feature_schema_version(self) -> int:
+        if issubclass(self.feature, FeatureModel):
+            return self.feature.schema_version
+        if issubclass(self.feature, PolarsFeatureModel):
+            return self.feature._schema_version
+        raise UnsupportedFeatureTypeError(self.feature)
 
 
 @dataclass
@@ -137,21 +174,20 @@ class AssetCollection:
         return cls.catalog
 
     @classmethod
-    async def _gather_asset_range(
+    async def _get_raw_asset_data(
         cls, asset_spec: FeatureAssetSpecification[CClass], the_now: datetime.datetime
-    ) -> list[CClass]:
+    ) -> AsyncIterator[list[dict[str, Any]]]:
         start_date = asset_spec.resolve_start_date(the_now)
         end_date = asset_spec.resolve_end_date(the_now)
         partitions = list(
             cls._get_catalog().iter_feature_store_partitions(
-                asset_spec.feature.asset_name,
-                asset_spec.feature.resolution,
+                asset_spec.feature_name,
+                asset_spec.feature_resolution,
                 start_date,
                 end_date,
-                asset_spec.feature.schema_version,
+                asset_spec.feature_schema_version,
             )
         )
-        all_data: list[CClass] = []
 
         async def _retrieve_async(partition: FeatureAsset) -> list[dict[str, Any]]:
             async with cls._get_semaphore():
@@ -159,22 +195,43 @@ class AssetCollection:
                 return await asyncio.to_thread(list, cls._get_catalog().retrieve_asset(partition))
 
         tasks: list[Coroutine[None, None, list[dict[str, Any]]]] = []
-
         logger.info(
-            f"Retrieving {len(partitions)} partitions.",
-            partitions=len(partitions),
-            asset_name=asset_spec.feature.asset_name,
+            f"Retrieving {len(partitions)} partitions.", partitions=len(partitions), asset_name=asset_spec.feature_name
         )
         for partition in partitions:
             tasks.append(_retrieve_async(partition))
+
         results = await asyncio.gather(*tasks)
         for data in results:
-            all_data.extend(asset_spec.feature(**row) for row in data)
+            yield data
+
+    @classmethod
+    async def _gather_pydantic_asset_range(
+        cls, asset_spec: FeatureAssetSpecification[PydanticFeature], the_now: datetime.datetime
+    ) -> list[PydanticFeature]:
+        if not issubclass(asset_spec.feature, FeatureModel):
+            raise TypeError(f"Expected pydantic feature model at this point, got {type(asset_spec.feature)!r}.")
+        all_data: list[PydanticFeature] = []
+        async for partition in cls._get_raw_asset_data(asset_spec, the_now):
+            all_data.extend(asset_spec.feature(**row) for row in partition)
         logger.info(
-            f"Downloaded {len(all_data)} rows from {len(partitions)} partitions.",
-            asset_name=asset_spec.feature.asset_name,
+            f"Downloaded {len(all_data)} rows.",
+            asset_name=asset_spec.feature_name,
         )
         return all_data
+
+    @classmethod
+    async def _gather_polars_asset_range(
+        cls, asset_spec: FeatureAssetSpecification[PolarsFeature], the_now: datetime.datetime
+    ) -> pandera.typing.polars.LazyFrame[PolarsFeature]:
+        if not issubclass(asset_spec.feature, PolarsFeatureModel):
+            raise TypeError(f"Expected polars feature model at this point, got {type(asset_spec.feature)!r}.")
+        dataframes: list[polars.LazyFrame] = []
+        async for partition in cls._get_raw_asset_data(asset_spec, the_now):
+            dataframes.append(polars.LazyFrame(partition))
+        if dataframes:
+            return asset_spec.feature.validate(polars.concat(dataframes, how="vertical", parallel=True))
+        return asset_spec.feature.validate(polars.LazyFrame(schema=asset_spec.feature.to_polars_schema_definition()))
 
     @classmethod
     def register_specification(
@@ -197,7 +254,7 @@ class AssetCollection:
             logger.warning(
                 "Registering duplicate fetch specification, existing will be discarded.",
                 field=field_name,
-                asset_name=specification.feature.asset_name,
+                asset_name=specification.feature_name,
             )
         logger.debug("Registering field into an asset collection.", collection=cls.__name__, field=field_name)
         cls._get_state().fetch_specifications[field_name] = specification
@@ -216,7 +273,20 @@ class AssetCollection:
 
         async def _gather(name: str, specs: FeatureAssetSpecification[CClass]) -> tuple[str, list[CClass]]:
             anchor_timestamp = cls._get_state().anchor_timestamps.get(name) or utcnow()
-            return (name, await cls._gather_asset_range(specs, anchor_timestamp))
+            cast_specs: FeatureAssetSpecification[FeatureModel] | FeatureAssetSpecification[PolarsFeatureModel]
+            if issubclass(specs.feature, FeatureModel):
+                cast_specs = cast(FeatureAssetSpecification[FeatureModel], specs)
+                return (
+                    name,
+                    cast(
+                        list[CClass],
+                        await cls._gather_pydantic_asset_range(cast_specs, anchor_timestamp),
+                    ),
+                )
+            if issubclass(specs.feature, PolarsFeatureModel):
+                cast_specs = cast(FeatureAssetSpecification[PolarsFeatureModel], specs)
+                return (name, cast(list[CClass], await cls._gather_polars_asset_range(cast_specs, anchor_timestamp)))
+            raise UnsupportedFeatureTypeError(specs.feature)
 
         async for prop, specs in iter_async(cls._get_state().fetch_specifications.items()):
             tasks.append(_gather(prop, specs))
@@ -273,8 +343,8 @@ class _FeatureFetchSpecifier(Generic[CClass]):
 
 
 def FeatureFetchSpecifier(  # noqa: N802, a fake class factory
-    feature: type[CClass], start_date: DateOrDelta | None = None, end_date: DateOrDelta | None = None
-) -> list[CClass]:
+    feature: type[PydanticFeature], start_date: DateOrDelta | None = None, end_date: DateOrDelta | None = None
+) -> list[PydanticFeature]:
     """Create a feature fetch specifier for the given feature model class.
 
     Args:
@@ -282,4 +352,10 @@ def FeatureFetchSpecifier(  # noqa: N802, a fake class factory
         start_date: The start date or delta from now to fetch the data.
         end_date: The end date or delta from now to fetch the data.
     """
-    return cast(list[CClass], _FeatureFetchSpecifier(feature, start_date, end_date))
+    return cast(list[PydanticFeature], _FeatureFetchSpecifier(feature, start_date, end_date))
+
+
+def PolarsFeatureFetchSpecifier(  # noqa: N802, a fake class factory
+    feature: type[PolarsFeature], start_date: DateOrDelta | None = None, end_date: DateOrDelta | None = None
+) -> pandera.typing.polars.LazyFrame[PolarsFeature]:
+    return cast(pandera.typing.polars.LazyFrame[PolarsFeature], _FeatureFetchSpecifier(feature, start_date, end_date))
