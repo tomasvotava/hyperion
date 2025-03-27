@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 (2025-03-27)
+
+### Feat
+
+- add Polars support for feature models and asset collections
+
 ## 0.5.1 (2025-03-18)
 
 ### Fix
