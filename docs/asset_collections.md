@@ -67,7 +67,7 @@ from hyperion.repository.asset_collection import AssetCollection, FeatureFetchSp
 import datetime
 
 class WeatherDataCollection(AssetCollection):
-    # Fetch last 7 days of pydantic weather data 
+    # Fetch last 7 days of pydantic weather data
     weather = FeatureFetchSpecifier(
         WeatherFeature,
         start_date=datetime.timedelta(days=-7)
