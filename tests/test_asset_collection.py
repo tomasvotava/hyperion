@@ -1,11 +1,12 @@
 import datetime
 from collections.abc import Iterator
-from typing import Annotated, Any, ClassVar, cast
+from typing import Any, ClassVar, cast
 
+import pandera.engines.polars_engine as polars_engine
 import pandera.errors
 import pandera.typing as pt
+import polars
 import pytest
-from pandera.engines.polars_engine import DateTime
 from pydantic import BaseModel
 
 from hyperion import dateutils
@@ -20,7 +21,7 @@ from hyperion.repository.asset_collection import (
     _CollectionState,
     _FeatureFetchSpecifier,
 )
-from hyperion.typeutils import DateOrDelta
+from hyperion.typeutils import DateOrDelta, PolarsUTCDateTime
 
 THE_NOW = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
 
@@ -43,6 +44,14 @@ class _FakeCatalog:
         return iter([{"partition_date": asset.partition_date}])
 
 
+class _EmptyFakeCatalog:
+    def iter_feature_store_partitions(self, *args: Any, **kwargs: Any) -> Iterator[FeatureAsset]:
+        return iter([])
+
+    def retrieve_asset(self, asset: FeatureAsset) -> Iterator[dict[str, Any]]:
+        return iter([])
+
+
 class MockFeature(FeatureModel, BaseModel):
     asset_name: ClassVar = "MockedAsset"
     resolution: ClassVar = TimeResolution(1, "d")
@@ -56,7 +65,7 @@ class PolarsMockFeature(PolarsFeatureModel):
     _resolution: ClassVar = TimeResolution(1, "d")
     _schema_version: ClassVar = 1
 
-    partition_date: pt.Series[Annotated[DateTime, False, "UTC", "us"]]
+    partition_date: pt.Series[PolarsUTCDateTime]
 
 
 class PolarsMockFeatureInvalid(PolarsFeatureModel):
@@ -191,3 +200,35 @@ class TestAssetCollection:
         assert list(MixedMockCollection.mocks_polars.collect()["partition_date"]) == list(
             row.partition_date for row in MixedMockCollection.mocks_pydantic
         )
+
+    async def test_empty_polars_dataframe(self) -> None:
+        class _TestAsset(PolarsFeatureModel):
+            integer: pt.Series[polars_engine.Int64]
+            dtime: pt.Series[PolarsUTCDateTime]
+            float64: pt.Series[polars_engine.Float64]
+            struct: pt.Series[polars_engine.Struct]
+            string: pt.Series[polars_engine.String]
+
+        class _Collection(AssetCollection):
+            catalog: ClassVar = cast(Catalog, _EmptyFakeCatalog())
+
+            test_asset = PolarsFeatureFetchSpecifier(_TestAsset, datetime.timedelta(days=-10))
+
+        await _Collection.fetch_all()
+        assert set(_Collection.test_asset.collect_schema().names()) == {
+            "integer",
+            "dtime",
+            "float64",
+            "struct",
+            "string",
+        }
+        assert len(_Collection.test_asset.collect()) == 0
+        schema = _Collection.test_asset.collect_schema()
+        for col, dtype in (
+            ("integer", polars.Int64),
+            ("dtime", polars.Datetime),
+            ("float64", polars.Float64),
+            ("struct", polars.Struct),
+            ("string", polars.String),
+        ):
+            assert type(schema.get(col)) is dtype

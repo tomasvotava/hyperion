@@ -9,6 +9,7 @@ import polars.datatypes
 from pydantic import BaseModel
 
 from hyperion.dateutils import TimeResolution, assure_timezone
+from hyperion.typeutils import map_pandera_dtype_to_polars
 
 AssetType = Literal["data_lake", "feature", "persistent_store"]
 
@@ -199,5 +200,5 @@ class PolarsFeatureModel(pa.DataFrameModel):
     _schema_version: ClassVar[int] = 1
 
     @classmethod
-    def to_polars_schema_definition(cls) -> dict[str, polars.datatypes.DataType]:
-        return {field.name: field.dtype.to_polars() for field in cls.to_schema().columns.values()}
+    def to_polars_schema_definition(cls) -> dict[str, type[polars.datatypes.DataType] | polars.datatypes.DataType]:
+        return {field.name: map_pandera_dtype_to_polars(field.dtype) for field in cls.to_schema().columns.values()}
