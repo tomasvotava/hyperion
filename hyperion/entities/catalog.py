@@ -200,5 +200,5 @@ class PolarsFeatureModel(pa.DataFrameModel):
     _schema_version: ClassVar[int] = 1
 
     @classmethod
-    def to_polars_schema_definition(cls) -> dict[str, type[polars.datatypes.DataType] | polars.datatypes.DataType]:
+    def to_polars_schema_definition(cls) -> dict[str, type[polars.DataType] | polars.DataType]:
         return {field.name: map_pandera_dtype_to_polars(field.dtype) for field in cls.to_schema().columns.values()}

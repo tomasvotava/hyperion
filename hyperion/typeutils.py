@@ -1,6 +1,7 @@
 import datetime
 from collections.abc import Sequence
 from dataclasses import asdict
+from inspect import isclass
 from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, TypeVar
 
 import pandera
@@ -69,10 +70,10 @@ def _get_pandera_type_attribute(
 
 
 def map_pandera_dtype_to_polars(
-    pandera_dtype: type[pandera.engines.polars_engine.DataType],
+    pandera_dtype: type[pandera.engines.polars_engine.DataType] | pandera.engines.polars_engine.DataType,
 ) -> type[polars.DataType] | polars.DataType:
     for pandtype, poldtype in PANDERA_TO_POLARS_MAPPING.items():
-        if isinstance(pandera_dtype, pandtype):
+        if isinstance(pandera_dtype, pandtype) or (isclass(pandera_dtype) and issubclass(pandera_dtype, pandtype)):
             if (copy_attributes := POLARS_SCHEMA_COPY_ATTRIBUTES.get(poldtype)) is not None:
                 dtype_kwargs = {
                     argname: _get_pandera_type_attribute(pandera_dtype, argname, default)
