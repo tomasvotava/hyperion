@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 (2025-03-28)
+
+### Fix
+
+- map pandera to polars dtype manually to create empty DataFrame/LazyFrame with the correct schema
+
 ## 0.6.0 (2025-03-27)
 
 ### Feat
