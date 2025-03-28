@@ -4,6 +4,7 @@ import hashlib
 import tempfile
 import time
 from abc import ABC, abstractmethod
+from base64 import b64decode, b64encode
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -85,7 +86,11 @@ class Cache(ABC):
 
     def _compress(self, value: str) -> bytes:
         """Compresses a value using snappy compression."""
-        compressed_value = snappy.compress(value.encode(encoding="utf-8"))
+        return self._compress_bytes(value.encode(encoding="utf-8"))
+
+    def _compress_bytes(self, value: bytes) -> bytes:
+        """Compress a bytes value using snappy compression."""
+        compressed_value = snappy.compress(value)
         logger.debug(
             "Compressed value using snappy compression.",
             original_length=len(value),
@@ -96,7 +101,11 @@ class Cache(ABC):
 
     def _decompress(self, value: bytes) -> str:
         """Decompresses a value using snappy decompression."""
-        return cast(str, snappy.decompress(value).decode(encoding="utf-8"))
+        return self._decompress_bytes(value).decode(encoding="utf-8")
+
+    def _decompress_bytes(self, value: bytes) -> bytes:
+        """Decompresses a bytes value using snappy decompression."""
+        return cast(bytes, snappy.decompress(value))
 
     @abstractmethod
     def get(self, key: str) -> str | None:
@@ -106,6 +115,16 @@ class Cache(ABC):
     @abstractmethod
     def set(self, key: str, value: str) -> None:
         """Sets a value in the cache."""
+        pass
+
+    @abstractmethod
+    def get_bytes(self, key: str) -> bytes | None:
+        """Gets a bytes value from the cache."""
+        pass
+
+    @abstractmethod
+    def set_bytes(self, key: str, value: bytes) -> None:
+        """Sets a bytes value in the cache."""
         pass
 
     @abstractmethod
@@ -142,6 +161,17 @@ class InMemoryCache(Cache):
     def set(self, key: str, value: str) -> None:
         self.cache[self._key(key)] = value
 
+    def set_bytes(self, key: str, value: bytes) -> None:
+        self.cache[self._key(key)] = b64encode(value).decode("ascii")
+
+    def get_bytes(self, key: str) -> bytes | None:
+        if (cached := self.cache.get(self._key(key))) is None:
+            return None
+        try:
+            return b64decode(cached.encode("ascii"))
+        except Exception as error:
+            raise CachingError(f"Failed to decode cached key {key!r}, make sure it was stored as bytes.") from error
+
     def delete(self, key: str) -> None:
         self.cache.pop(self._key(key), None)
 
@@ -162,11 +192,13 @@ class LocalFileCache(Cache):
         default_ttl: int = DEFAULT_TTL_SECONDS,
         root_path: Path | None = None,
         max_size: int | None = DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE,
+        use_compression: bool = True,
     ) -> None:
         super().__init__(prefix, hash_keys, default_ttl)
         self.root_path = root_path or Path(tempfile.mkdtemp())
         if self.root_path.exists() and not self.root_path.is_dir():
             raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
+        self.use_compression = use_compression
         self.max_size = max_size
         self._assert_root_path()
         logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
@@ -215,22 +247,35 @@ class LocalFileCache(Cache):
         return (current_time - key.stat().st_mtime) > self.default_ttl
 
     def get(self, key: str) -> str | None:
-        self._assert_root_path()
-        key_path = self._key_path(key)
-        if not key_path.exists():
+        if (cached := self.get_bytes(key)) is None:
             return None
-        if self._is_expired(key_path):
-            logger.debug("Key is expired, deleting file.", key=key, key_path=key_path)
-            key_path.unlink()
-            return None
-        logger.debug("Reading key from file.", key=key, path=key_path.as_posix())
-        return self._decompress(key_path.read_bytes())
+        return cached.decode("utf-8")
 
-    def set(self, key: str, value: str) -> None:
+    def get_bytes(self, key: str) -> bytes | None:
+        self._assert_root_path()
+        if not self.hit(key):
+            return None
+        key_path = self._key_path(key)
+        logger.debug("Reading key from file.", key=key, path=key_path.as_posix())
+        content = key_path.read_bytes()
+        if self.use_compression:
+            return self._decompress_bytes(content)
+        return content
+
+    def _set(self, key: str, value: str | bytes) -> None:
         self._assert_root_path()
         key_path = self._key_path(key)
         logger.debug("Storing key into a file.", key=key, path=key_path.as_posix())
-        key_path.write_bytes(self._compress(value))
+        if isinstance(value, str):
+            value = value.encode("utf-8")
+        content = self._compress_bytes(value) if self.use_compression else value
+        key_path.write_bytes(content)
+
+    def set(self, key: str, value: str) -> None:
+        return self._set(key, value)
+
+    def set_bytes(self, key: str, value: bytes) -> None:
+        return self._set(key, value)
 
     def delete(self, key: str) -> None:
         self._assert_root_path()
@@ -242,7 +287,13 @@ class LocalFileCache(Cache):
 
     def hit(self, key: str) -> bool:
         key_path = self._key_path(key)
-        return key_path.exists()
+        if not key_path.exists():
+            return False
+        if self._is_expired(key_path):
+            logger.debug("Key is expired, deleting file.", key=key, key_path=key_path)
+            key_path.unlink()
+            return False
+        return True
 
     def clear(self) -> None:
         self._assert_root_path()
@@ -325,6 +376,17 @@ class PersistentCache(Cache):
         cache_key = self._key(key)
         self.data[cache_key] = value
 
+    def set_bytes(self, key: str, value: bytes) -> None:
+        return self.set(key, b64encode(value).decode("ascii"))
+
+    def get_bytes(self, key: str) -> bytes | None:
+        if (cached := self.get(key)) is None:
+            return None
+        try:
+            return b64decode(cached.encode("ascii"))
+        except Exception as error:
+            raise CachingError(f"Failed to decode cached key {key!r}, make sure it was stored as bytes.") from error
+
     def delete(self, key: str) -> None:
         cache_key = self._key(key)
         if cache_key in self.data:
@@ -351,17 +413,17 @@ class DynamoDBCache(Cache):
         self.table = self.client.Table(table_name)
 
     def get(self, key: str) -> str | None:
-        cache_key = self._key(key)
-        response = self.table.get_item(Key={"key": cache_key})
-        item = response.get("Item")
-        if item:
-            return self._decompress(bytes(item["value"]))
-        return None
+        if (cached := self.get_bytes(key)) is None:
+            return None
+        return cached.decode("utf-8")
 
     def set(self, key: str, value: str) -> None:
+        return self.set_bytes(key, value.encode("utf-8"))
+
+    def set_bytes(self, key: str, value: bytes) -> None:
         expiration_time = int(time.time()) + self.default_ttl
         cache_key = self._key(key)
-        compressed_value = self._compress(value)
+        compressed_value = self._compress_bytes(value)
         if len(compressed_value) > DYNAMODB_MAX_LENGTH:
             logger.warning(
                 "Value is too long to store in DynamoDB.",
@@ -373,6 +435,14 @@ class DynamoDBCache(Cache):
         self.table.put_item(
             Item={"key": cache_key, "value": compressed_value, self.TTL_ATTRIBUTE_NAME: expiration_time}
         )
+
+    def get_bytes(self, key: str) -> bytes | None:
+        cache_key = self._key(key)
+        response = self.table.get_item(Key={"key": cache_key})
+        item = response.get("Item")
+        if item:
+            return self._decompress_bytes(bytes(item["value"]))
+        return None
 
     def delete(self, key: str) -> None:
         key = self._key(key)
