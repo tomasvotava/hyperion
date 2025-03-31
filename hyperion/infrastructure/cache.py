@@ -5,8 +5,11 @@ import tempfile
 import time
 from abc import ABC, abstractmethod
 from base64 import b64decode, b64encode
+from collections.abc import Iterator
+from contextlib import contextmanager
+from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import IO, Any, ClassVar, Literal, cast, overload
 
 import boto3
 import cachetools
@@ -21,6 +24,8 @@ from hyperion.log import get_logger
 DEFAULT_TTL_SECONDS = 60
 DYNAMODB_MAX_LENGTH = 65535
 DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
+
+CacheKeyOpenMode = Literal["str", "bytes"]
 
 logger = get_logger("cache")
 
@@ -106,6 +111,41 @@ class Cache(ABC):
     def _decompress_bytes(self, value: bytes) -> bytes:
         """Decompresses a bytes value using snappy decompression."""
         return cast(bytes, snappy.decompress(value))
+
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
+        pass
+
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
+        pass
+
+    @contextmanager
+    def open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[bytes] | IO[str]]:
+        """Opens a file-like object for reading and writing to the cache.
+        This is useful for streaming data to and from the cache.
+        In the base class, this has no performance benefits, because the implementation is in memory (using
+        StringIO or BytesIO), but in the LocalFileCache, this is useful for streaming data to and from the file system.
+
+        Args:
+            key (str): The key for the cache.
+            mode (str): The mode for opening the file-like object. Can be "str" or "bytes".
+
+        Yields:
+            IO[bytes] | IO[str]: A file-like object for reading and writing to the cache.
+        """
+        if mode == "str":
+            with StringIO(self.get(key) or "") as file:
+                yield file
+                self.set(key, file.getvalue())
+        elif mode == "bytes":
+            with BytesIO(self.get_bytes(key) or b"") as file:
+                yield file
+                self.set_bytes(key, file.getvalue())
+        else:
+            raise ValueError(f"Unsupported open mode {mode!r} - 'str' or 'bytes' are supported.")
 
     @abstractmethod
     def get(self, key: str) -> str | None:
@@ -220,6 +260,43 @@ class LocalFileCache(Cache):
     def get_total_size(self) -> int:
         self._assert_root_path()
         return sum(key_path.stat().st_size for key_path in self.root_path.iterdir() if key_path.is_file())
+
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
+        pass
+
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
+        pass
+
+    @contextmanager
+    def open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[str] | IO[bytes]]:
+        self.hit(key)  # this should expire the file if needed
+        if self.use_compression:
+            logger.warning(
+                "Current LocalFileCache implementation does not work well with compression on. "
+                "It compresses the content in-memory. For now, you should consider using "
+                "use_compression=False and utilizing e.g. snappy or gzip manually."
+            )
+            with super().open(key, mode) as file:
+                yield file
+            return
+        key_path = self._key_path(key)
+        key_path.touch(exist_ok=True)
+        if mode == "str":
+            with key_path.open("a+") as file:
+                file.seek(0)
+                yield file
+        elif mode == "bytes":
+            with key_path.open("a+b") as file:
+                file.seek(0)
+                yield file
+        else:
+            raise ValueError(f"Unsupported open mode {mode!r} - 'str' or 'bytes' are supported.")
+        if not key_path.stat().st_size:
+            key_path.unlink(missing_ok=True)
 
     def shrink_to_fit_max_size(self) -> None:
         self.cleanup()

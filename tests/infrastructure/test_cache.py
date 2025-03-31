@@ -134,6 +134,40 @@ class TestCache:
         for key in (*test_data_str.keys(), *test_data_bytes.keys()):
             assert not instance.hit(key)
 
+    def test_open_str_new(self, instance: Cache) -> None:
+        assert not instance.hit("file-str")
+        with instance.open("file-str", "str") as file:
+            assert file.tell() == 0
+            assert file.read() == ""
+            file.write("this is a test")
+        assert instance.get("file-str") == "this is a test"
+
+    def test_open_str_existing(self, instance: Cache) -> None:
+        instance.set("file-str-existing", "this was already there")
+        with instance.open("file-str-existing", "str") as file:
+            assert file.read() == "this was already there"
+            file.truncate(0)
+            file.seek(0)
+            file.write("this is a new content")
+        assert instance.get("file-str-existing") == "this is a new content"
+
+    def test_open_bytes_new(self, instance: Cache) -> None:
+        assert not instance.hit("file-bytes")
+        with instance.open("file-bytes", "bytes") as file:
+            assert file.tell() == 0
+            assert file.read() == b""
+            file.write(b"this is a test")
+        assert instance.get_bytes("file-bytes") == b"this is a test"
+
+    def test_open_bytes_existing(self, instance: Cache) -> None:
+        instance.set_bytes("file-bytes-existing", b"this was already there")
+        with instance.open("file-bytes-existing", "bytes") as file:
+            assert file.read() == b"this was already there"
+            file.truncate(0)
+            file.seek(0)
+            file.write(b"this is a new content")
+        assert instance.get_bytes("file-bytes-existing") == b"this is a new content"
+
     def test_mixed_access(self, instance: Cache) -> None:
         assert not instance.hit("mixed")
         instance.set("mixed", "is a string")
@@ -162,3 +196,10 @@ def test_local_file_cache_expires(local_file_cache_expire: LocalFileCache) -> No
     assert local_file_cache_expire.get("test-expire") == "test"
     sleep(2)
     assert not local_file_cache_expire.hit("test-expire")
+
+
+def test_local_file_cache_empty_is_deleted_on_close(local_file_cache_no_compression: LocalFileCache) -> None:
+    assert not local_file_cache_no_compression.hit("test-autodelete")
+    with local_file_cache_no_compression.open("test-autodelete", "str") as _:
+        pass
+    assert not local_file_cache_no_compression.hit("test-autodelete")
