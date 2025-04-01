@@ -83,6 +83,9 @@ class SchemaStore(abc.ABC):
         """
         return SchemaStore.from_path(storage_config.schema_path)
 
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} path={self.path!r}>"
+
 
 class LocalSchemaStore(SchemaStore):
     """Schema store for local files."""
