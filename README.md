@@ -18,6 +18,8 @@ A headless ETL / ELT / data pipeline and integration SDK for Python.
 - **Caching**: In-memory, local file, and DynamoDB caching options
 - **Asynchronous Processing**: Utilities for async operations and task queues
 - **Geo Utilities**: Location-based services with Google Maps integration
+- **Catalog Caching**: Cache downloaded assets for faster repeated access
+- **Asset Collections**: High-level interface for working with groups of assets
 
 ## Core Concepts
 
@@ -69,6 +71,7 @@ The Catalog is the central component that manages asset storage and retrieval:
 - **Asset Retrieval**: Provides methods to retrieve assets by name, date, and schema version
 - **Partitioning**: Handles partitioning logic for different asset types
 - **Notifications**: Can send notifications when new assets arrive
+- **Caching**: Can use a cache for faster repeated retrieval of assets
 
 ### Source Framework
 
@@ -136,6 +139,12 @@ HYPERION_HTTP_PROXY_HTTPS=http://proxy:8080
 
 # Geo settings (optional)
 HYPERION_GEO_GMAPS_API_KEY=your-google-maps-api-key
+
+# Cache settings
+HYPERION_STORAGE_CACHE_DYNAMODB_TABLE=my-cache-table  # Optional DynamoDB table for caching
+HYPERION_STORAGE_CACHE_DYNAMODB_DEFAULT_TTL=3600      # Default TTL for cache items (seconds)
+HYPERION_STORAGE_CACHE_LOCAL_PATH=/tmp/hyperion-cache # Path for local file cache
+HYPERION_STORAGE_CACHE_KEY_PREFIX=my-prefix           # Optional prefix for cache keys
 ```
 
 Before any real documentation is written, you can check the
@@ -240,6 +249,28 @@ catalog.store_asset(asset, products)
 # Retrieve reference data
 for product in catalog.retrieve_asset(asset):
     print(product)
+```
+
+#### Using a Cached Catalog
+
+```python
+from hyperion.catalog import Catalog
+from hyperion.infrastructure.cache import LocalFileCache
+from pathlib import Path
+
+# Create a catalog with a local file cache
+cached_catalog = Catalog(
+    data_lake_bucket="my-data-lake-bucket",
+    feature_store_bucket="my-feature-store-bucket",
+    persistent_store_bucket="my-persistent-store-bucket",
+    cache=LocalFileCache("catalog", default_ttl=3600, root_path=Path("/tmp/hyperion-cache"))
+)
+
+# First retrieval will download from S3
+data = list(cached_catalog.retrieve_asset(asset))
+
+# Subsequent retrievals will use the cache
+data_again = list(cached_catalog.retrieve_asset(asset))  # Much faster!
 ```
 
 ### Creating a Custom Source
@@ -358,6 +389,13 @@ asyncio.run(repartition_data())
 
 ### Caching
 
+Hyperion provides two types of caching:
+
+1. **Key-Value Cache**: For general-purpose caching of any data
+2. **Catalog Asset Cache**: For efficient retrieval of assets from storage
+
+#### Key-Value Cache
+
 ```python
 from hyperion.infrastructure.cache import Cache
 
@@ -377,6 +415,36 @@ if cache.hit("my-key"):
 
 # Delete key
 cache.delete("my-key")
+```
+
+#### Catalog Asset Cache
+
+```python
+from hyperion.catalog import Catalog
+from hyperion.infrastructure.cache import LocalFileCache
+
+# Create a catalog with a local file cache
+catalog = Catalog(
+    data_lake_bucket="my-data-lake-bucket",
+    feature_store_bucket="my-feature-store-bucket",
+    persistent_store_bucket="my-persistent-store-bucket",
+    cache=LocalFileCache("catalog", root_path="/tmp/hyperion-cache")
+)
+
+# Now asset retrievals will be cached
+# First time: downloads from S3
+data1 = list(catalog.retrieve_asset(asset1))
+
+# Second time: uses cache
+data1_again = list(catalog.retrieve_asset(asset1))  # Much faster!
+
+# Different asset: downloads from S3
+data2 = list(catalog.retrieve_asset(asset2))
+
+# Force bypass cache for a specific retrieval
+with catalog._get_asset_file_handle(asset, no_cache=True) as file:
+    # Process file directly without using cache
+    pass
 ```
 
 ### Geo Utilities

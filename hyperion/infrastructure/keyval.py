@@ -7,10 +7,13 @@ import gzip
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from fnmatch import fnmatch
-from typing import Literal, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
 
 import boto3
 import snappy
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.type_defs import ScanInputTableScanTypeDef
 
 CompressionType = Literal["snappy", "gzip"]
 
@@ -219,7 +222,7 @@ class DynamoDBStore(KeyValueStore):
         item = response.get("Item")
         if not item:
             return None
-        return bytes(item[self.value_attribute])
+        return bytes(cast(Any, item[self.value_attribute]))
 
     def _set_raw(self, hashed_key: str, compresed_value: bytes) -> None:
         self.table.put_item(Item={self.key_attribute: hashed_key, self.value_attribute: compresed_value})
@@ -228,7 +231,10 @@ class DynamoDBStore(KeyValueStore):
         self.table.delete_item(Key={self.key_attribute: hashed_key})
 
     def _iter_all_keys(self) -> Iterable[str]:
-        scan_kwargs = {"ProjectionExpression": "#k", "ExpressionAttributeNames": {"#k": self.key_attribute}}
+        scan_kwargs: ScanInputTableScanTypeDef = {
+            "ProjectionExpression": "#k",
+            "ExpressionAttributeNames": {"#k": self.key_attribute},
+        }
         while True:
             response = self.table.scan(**scan_kwargs)
             for item in response.get("Items", []):

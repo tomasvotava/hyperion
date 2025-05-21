@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypedDict, TypeVar, cast
+from typing import IO, TYPE_CHECKING, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypedDict, TypeVar, cast
 from uuid import uuid4
 
 import botocore.exceptions
@@ -37,6 +37,9 @@ from hyperion.entities.catalog import (
 from hyperion.infrastructure.aws import S3Client
 from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage, Queue
 from hyperion.log import get_logger
+
+if TYPE_CHECKING:
+    from hyperion.infrastructure.cache import Cache
 
 __all__ = ["AssetNotFoundError", "Catalog", "CatalogError"]
 
@@ -206,6 +209,8 @@ class Catalog:
         feature_store_prefix: str = "",
         persistent_store_prefix: str = "",
         queue: Queue | None = None,
+        cache: "Cache | None" = None,
+        schema_store: "SchemaStore | None" = None,
     ) -> None:
         """Initialize the catalog.
 
@@ -217,6 +222,7 @@ class Catalog:
             feature_store_prefix (str): The prefix for feature store assets.
             persistent_store_prefix (str): The prefix for persistent store assets.
             queue (Queue, optional): The queue to use for notifications. Defaults to None.
+            cache (Cache, optional): The cache to use for storing assets for quicker re-retrieval. Defaults to None.
         """
         self.data_lake_bucket = data_lake_bucket
         self.feature_store_bucket = feature_store_bucket
@@ -231,6 +237,14 @@ class Catalog:
         }
         self._s3_client: S3Client | None = None
         self.queue = queue or Queue.from_config()
+        self.cache = cache
+        if self.cache is not None and not self.cache.hash_keys:
+            logger.warning(
+                "It is recommended to hash keys when caching catalog assets, "
+                "because asset paths may contain unsafe characters."
+            )
+
+        self.schema_store = schema_store or SchemaStore.from_config()
 
     @property
     def s3_client(self) -> S3Client:
@@ -254,7 +268,7 @@ class Catalog:
     @contextmanager
     def _prepare_asset_storage(self, asset: AssetProtocol, data: Iterable[dict[str, Any]]) -> Iterator[IO[bytes]]:
         with tempfile.NamedTemporaryFile("+wb") as file:
-            schema = SchemaStore.from_config().get_asset_schema(asset)
+            schema = self.schema_store.get_asset_schema(asset)
             path = Path(file.name)
             logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
             _write_avro(file, schema, data, asset.to_metadata())
@@ -357,6 +371,48 @@ class Catalog:
                 raise AssetNotFoundError(asset) from error
             raise
 
+    def _get_cache_key(self, asset: AssetProtocol) -> str:
+        store_config = self.get_store_config(asset)
+        path = asset.get_path(store_config["prefix"])
+        return f"{store_config['bucket']}:{path}"
+
+    def _iter_data_from_downloaded_asset(
+        self, file: BinaryIO | IO[bytes], asset: AssetProtocol
+    ) -> Iterator[dict[str, Any]]:
+        for row_number, row in enumerate(fastavro.reader(file), start=1):
+            if isinstance(row, dict):
+                yield row
+            else:
+                logger.error(
+                    "Unexpected data found in a downloaded asset row.",
+                    asset=asset,
+                    expected="dict",
+                    row_number=row_number,
+                    got=str(type(row)),
+                )
+                raise TypeError(f"Unexpected data received when reading downloaded asset data, row {row_number}")
+
+    def _download_asset_into_file(self, asset: AssetProtocol, file: IO[bytes]) -> None:
+        store_config = self.get_store_config(asset)
+        logger.info("Downloading asset into a file.", asset=asset, path=getattr(file, "name", None) or "unnamed")
+        self.s3_client.download(store_config["bucket"], asset.get_path(store_config["prefix"]), file)
+
+    @contextmanager
+    def _get_asset_file_handle(self, asset: AssetProtocol, *, no_cache: bool = False) -> Iterator[IO[bytes]]:
+        if no_cache or self.cache is None:
+            with tempfile.NamedTemporaryFile("+wb") as file:
+                self._download_asset_into_file(asset, file)
+                file.seek(0)
+                yield file
+            return
+        cache_key = self._get_cache_key(asset)
+        hit = self.cache.hit(cache_key)
+        with self.cache.open(cache_key, "bytes") as cache_file:
+            if not hit:
+                self._download_asset_into_file(asset, cache_file)
+            cache_file.seek(0)
+            yield cache_file
+
     def retrieve_asset(self, asset: AssetProtocol) -> Iterator[dict[str, Any]]:
         """Retrieve an asset based on its type and store config.
 
@@ -366,25 +422,8 @@ class Catalog:
         Yields:
             dict[str, Any]: The asset data.
         """
-        store_config = self.get_store_config(asset)
-        file_size = self.get_asset_file_size(asset)
-        logger.info("Preparing asset for retrieval.", asset=asset, file_size=file_size, **store_config)
-        with tempfile.NamedTemporaryFile("+wb") as file:
-            logger.info("Downloading asset into a temporary file.", asset=asset, path=file.name)
-            self.s3_client.download(store_config["bucket"], asset.get_path(store_config["prefix"]), file)
-            file.seek(0)
-            for row_number, row in enumerate(fastavro.reader(file), start=1):
-                if isinstance(row, dict):
-                    yield row
-                else:
-                    logger.error(
-                        "Unexpected data found in data lake asset row.",
-                        asset=asset,
-                        expected="dict",
-                        row_number=row_number,
-                        got=str(type(row)),
-                    )
-                    raise TypeError("Unexpected data received when reading asset data.")
+        with self._get_asset_file_handle(asset) as file:
+            return self._iter_data_from_downloaded_asset(file, asset)
 
     def iter_datalake_partitions(self, asset_name: str, date_part: str | None = None) -> Iterator[DataLakeAsset]:
         """Iterate over data lake partitions.
@@ -577,7 +616,7 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         asset = self._create_partition_asset(partition_date)
         writer = fastavro.write.Writer(
             file,
-            schema=SchemaStore.from_config().get_asset_schema(asset),
+            schema=self.catalog.schema_store.get_asset_schema(asset),
             codec="deflate",
             validator=True,
             metadata=asset.to_metadata(),

@@ -486,6 +486,8 @@ class DynamoDBCache(Cache):
     ):
         super().__init__(prefix, hash_keys, default_ttl)
         self.client = boto3.resource("dynamodb")
+        if table_name is None:
+            raise ValueError("No table_name was provided for DynamoDBCache.")
         self.table_name = table_name
         self.table = self.client.Table(table_name)
 
@@ -518,7 +520,7 @@ class DynamoDBCache(Cache):
         response = self.table.get_item(Key={"key": cache_key})
         item = response.get("Item")
         if item:
-            return self._decompress_bytes(bytes(item["value"]))
+            return self._decompress_bytes(bytes(cast(Any, item["value"])))
         return None
 
     def delete(self, key: str) -> None:
@@ -540,4 +542,7 @@ class DynamoDBCache(Cache):
     def hit(self, key: str) -> bool:
         cache_key = self._key(key)
         item = self.table.get_item(Key={"key": cache_key}, ProjectionExpression=self.TTL_ATTRIBUTE_NAME).get("Item")
-        return bool(item and int(item.get(self.TTL_ATTRIBUTE_NAME, 0)) > int(time.time()))
+        if not item:
+            return False
+        item_ttl = int(cast(Any, item.get(self.TTL_ATTRIBUTE_NAME) or 0))
+        return bool(item and item_ttl > int(time.time()))
