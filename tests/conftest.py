@@ -4,6 +4,7 @@ import socket
 import subprocess
 from collections.abc import Iterator
 from contextlib import closing
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -14,6 +15,14 @@ def _get_free_tcp_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
         sock.bind(("localhost", 0))
         return cast(int, sock.getsockname()[1])
+
+
+@pytest.fixture(scope="session")
+def data_dir() -> Path:
+    data_path = (Path(__file__).parent / "data").resolve()
+    if not data_path.exists():
+        raise FileNotFoundError(f"Tests data directory not found in {data_path}.")
+    return data_path
 
 
 @pytest.fixture(scope="session")

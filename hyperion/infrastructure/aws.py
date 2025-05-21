@@ -8,7 +8,7 @@ from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import IO, BinaryIO, TypeVar, cast
+from typing import IO, TYPE_CHECKING, BinaryIO, TypeVar
 
 import aioboto3
 import boto3
@@ -16,6 +16,9 @@ import botocore.exceptions
 
 from hyperion.config import storage_config
 from hyperion.log import get_logger
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.type_defs import PaginatorConfigTypeDef
 
 PathOrIOBinary = str | Path | BinaryIO | IO[bytes]
 
@@ -108,7 +111,7 @@ class S3Client:
             Iterator[str]: The keys of the objects in the bucket.
         """
         paginator = self._client.get_paginator("list_objects_v2")
-        pagination_config = {"StartingToken": None}
+        pagination_config: PaginatorConfigTypeDef = {}
         logger.debug("Listing contents of a bucket.", bucket=bucket, prefix=prefix)
         response_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix, PaginationConfig=pagination_config)
         for response in response_iterator:
@@ -129,7 +132,7 @@ class S3Client:
             file = Path(file)
             logger.debug("Uploading from path.", path=file.as_posix(), bucket=bucket, name=name)
             try:
-                self._client.upload_file(file, bucket, name)
+                self._client.upload_file(file.as_posix(), bucket, name)
             except botocore.exceptions.ClientError:
                 logger.error("Error when uploading file to S3.", file=file.as_posix(), bucket=bucket, name=name)
                 raise
@@ -190,7 +193,7 @@ class S3Client:
             file = Path(file)
             logger.debug("Downloading into a path.", path=file.as_posix(), bucket=bucket, name=name)
             try:
-                self._client.download_file(bucket, name, file)
+                self._client.download_file(bucket, name, file.as_posix())
             except botocore.exceptions.ClientError:
                 logger.error("Error when downloading file from S3.", bucket=bucket, name=name, path=file.as_posix())
                 raise
@@ -214,7 +217,7 @@ class S3Client:
         """
         logger.debug("Downloading object as a string.", bucket=bucket, name=name)
         try:
-            return cast(str, self._client.get_object(Bucket=bucket, Key=name)["Body"].read().decode("utf-8"))
+            return self._client.get_object(Bucket=bucket, Key=name)["Body"].read().decode("utf-8")
         except botocore.exceptions.ClientError:
             logger.error("Error when downloading file from S3.", bucket=bucket, name=name)
             raise
