@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (2025-05-21)
+
+### Feat
+
+- add asset caching to Catalog
+- add __repr__ method to SchemaStore for better debugging
+- add open method to Cache for file-like access with string and bytes modes
+- extend Cache interface with get_bytes and set_bytes
+
 ## 0.6.1 (2025-03-28)
 
 ### Fix
