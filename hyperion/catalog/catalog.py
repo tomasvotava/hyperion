@@ -423,7 +423,7 @@ class Catalog:
             dict[str, Any]: The asset data.
         """
         with self._get_asset_file_handle(asset) as file:
-            return self._iter_data_from_downloaded_asset(file, asset)
+            yield from self._iter_data_from_downloaded_asset(file, asset)
 
     def iter_datalake_partitions(self, asset_name: str, date_part: str | None = None) -> Iterator[DataLakeAsset]:
         """Iterate over data lake partitions.
@@ -443,11 +443,14 @@ class Catalog:
         keys_prefix = get_prefixed_path(f"{asset_name}/date={date_part if date_part else ''}", store_config["prefix"])
         version_patt = re.compile(r"v(?P<version>\d+)\.avro")
         for key in self.s3_client.iter_objects(store_config["bucket"], keys_prefix):
+            key_without_prefix = key[len(self.data_lake_prefix) :] if self.data_lake_prefix else key
             try:
-                key_asset_name, partition, filename = key.split("/")
+                key_asset_name, partition, filename = key_without_prefix.split("/")
             except ValueError:
                 logger.warning(
-                    "The key path does not have 'Asset/Partition/Version' format and will be skipped.", key=key
+                    "The key path does not have 'Asset/Partition/Version' format and will be skipped.",
+                    key=key,
+                    key_without_prefix=key_without_prefix,
                 )
                 continue
             if key_asset_name != asset_name:
