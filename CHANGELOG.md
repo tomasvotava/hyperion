@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 (2025-06-02)
+
+### Fix
+
+- ensure cached asset is not closed before read
+
 ## 0.7.0 (2025-05-21)
 
 ### Feat
