@@ -30,9 +30,9 @@ PLACES_PARTITION_DATES = (
     datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
     datetime.datetime(2025, 2, 1, tzinfo=datetime.timezone.utc),
 )
-SUEPRFEATURE_DATE_START = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+SUPERFEATURE_DATE_START = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
 SUPERFEATURE_PARTITION_DATES = [
-    quantize_datetime(SUEPRFEATURE_DATE_START + datetime.timedelta(days=day), "1d") for day in range(0, 7)
+    quantize_datetime(SUPERFEATURE_DATE_START + datetime.timedelta(days=day), "1d") for day in range(0, 7)
 ]
 
 
@@ -76,7 +76,7 @@ def _create_fake_data_lake(data_dir: Path, s3client: "S3Client") -> None:
         _create_fake_asset("places", s3client, place_partition_date, "data_lake", data_dir / "assets/places.v1.avro")
 
 
-def _create_fake_feautre_store(data_dir: Path, s3client: "S3Client") -> None:
+def _create_fake_feature_store(data_dir: Path, s3client: "S3Client") -> None:
     for feature_file in (data_dir / "assets").glob("superfeature.*.v1.avro"):
         partition_date_str = feature_file.name.split(".")[1]
         partition_date = assure_timezone(datetime.date.fromisoformat(partition_date_str))
@@ -86,7 +86,7 @@ def _create_fake_feautre_store(data_dir: Path, s3client: "S3Client") -> None:
 @pytest.fixture(scope="module")
 def _test_data(data_dir: Path, s3client: "S3Client") -> None:
     _create_fake_data_lake(data_dir, s3client)
-    _create_fake_feautre_store(data_dir, s3client)
+    _create_fake_feature_store(data_dir, s3client)
 
 
 @pytest.fixture(name="test_tmp_dir", scope="session")
@@ -216,12 +216,12 @@ class TestCatalog:
             FeatureAsset("superfeature", partition_date, "1d") for partition_date in SUPERFEATURE_PARTITION_DATES
         ]
         features = catalog.iter_feature_store_partitions(
-            "superfeature", TimeResolution(1, "d"), SUEPRFEATURE_DATE_START, SUPERFEATURE_PARTITION_DATES[-1]
+            "superfeature", TimeResolution(1, "d"), SUPERFEATURE_DATE_START, SUPERFEATURE_PARTITION_DATES[-1]
         )
         assert list(features) == expected_features
 
         features = catalog.iter_feature_store_partitions(
-            "superfeature", TimeResolution(1, "d"), SUEPRFEATURE_DATE_START, SUEPRFEATURE_DATE_START
+            "superfeature", TimeResolution(1, "d"), SUPERFEATURE_DATE_START, SUPERFEATURE_DATE_START
         )
         assert len(list(features)) == 1
 

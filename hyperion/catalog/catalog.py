@@ -348,7 +348,7 @@ class Catalog:
             config_key = asset if isinstance(asset, type) else asset.__class__
             return self._config_map[config_key]
         except KeyError:
-            logger.error("Attempting to get store config for an unsupported asset tyoe.", asset=asset)
+            logger.error("Attempting to get store config for an unsupported asset type.", asset=asset)
             raise
 
     def get_asset_file_size(self, asset: AssetProtocol) -> int:
