@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from base64 import b64decode, b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import IO, Any, ClassVar, Literal, cast, overload
@@ -28,6 +29,35 @@ DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
 CacheKeyOpenMode = Literal["str", "bytes"]
 
 logger = get_logger("cache")
+
+
+@dataclass
+class CacheStats:
+    hits: int
+    misses: int
+    gets: int
+    deletes: int
+    clears: int
+    sets: int
+
+    @classmethod
+    def empty(cls) -> "CacheStats":
+        return cls(hits=0, misses=0, gets=0, deletes=0, clears=0, sets=0)
+
+    def __sub__(self, other: Any) -> dict[str, int]:
+        if not isinstance(other, CacheStats):
+            return NotImplemented
+        difference: dict[str, int] = {}
+        for field in CacheStats.__dataclass_fields__:
+            ours = getattr(self, field)
+            theirs = getattr(other, field)
+            if not isinstance(ours, int):
+                raise TypeError(f"Field {field!r} is not an integer on {self!r}.")
+            if not isinstance(theirs, int):
+                raise TypeError(f"Field {field!r} is not an integer on {other!r}.")
+            if diff := ours - theirs:
+                difference[field] = diff
+        return difference
 
 
 class CachingError(Exception):
@@ -81,6 +111,14 @@ class Cache(ABC):
         self.prefix = prefix
         self.hash_keys = hash_keys
         self.default_ttl = default_ttl
+        self._stats = CacheStats.empty()
+
+    def reset_stats(self) -> None:
+        self._stats = CacheStats.empty()
+
+    @property
+    def stats(self) -> CacheStats:
+        return replace(self._stats)
 
     def _key(self, key: str) -> str:
         """Generates a cache key from a given key."""
@@ -114,16 +152,16 @@ class Cache(ABC):
 
     @overload
     @contextmanager
-    def open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
+    def _open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
         pass
 
     @overload
     @contextmanager
-    def open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
+    def _open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
         pass
 
     @contextmanager
-    def open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[bytes] | IO[str]]:
+    def _open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[bytes] | IO[str]]:
         """Opens a file-like object for reading and writing to the cache.
         This is useful for streaming data to and from the cache.
         In the base class, this has no performance benefits, because the implementation is in memory (using
@@ -137,50 +175,102 @@ class Cache(ABC):
             IO[bytes] | IO[str]: A file-like object for reading and writing to the cache.
         """
         if mode == "str":
-            with StringIO(self.get(key) or "") as file:
+            with StringIO(self._get(key) or "") as file:
                 yield file
-                self.set(key, file.getvalue())
+                self._set(key, file.getvalue())
         elif mode == "bytes":
-            with BytesIO(self.get_bytes(key) or b"") as file:
+            with BytesIO(self._get_bytes(key) or b"") as file:
                 yield file
-                self.set_bytes(key, file.getvalue())
+                self._set_bytes(key, file.getvalue())
         else:
             raise ValueError(f"Unsupported open mode {mode!r} - 'str' or 'bytes' are supported.")
 
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
+        pass
+
+    @overload
+    @contextmanager
+    def open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
+        pass
+
+    @contextmanager
+    def open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[bytes] | IO[str]]:
+        self._stats.gets += 1
+        with self._open(key, mode) as file:
+            yield file
+        self._stats.sets += 1
+
     @abstractmethod
+    def _get(self, key: str) -> str | None:
+        pass
+
     def get(self, key: str) -> str | None:
         """Gets a value from the cache."""
-        pass
+        self._stats.gets += 1
+        if (cached := self._get(key)) is not None:
+            self._stats.hits += 1
+        else:
+            self._stats.misses += 1
+        return cached
 
     @abstractmethod
+    def _set(self, key: str, value: str) -> None:
+        pass
+
     def set(self, key: str, value: str) -> None:
         """Sets a value in the cache."""
-        pass
+        self._stats.sets += 1
+        self._set(key, value)
 
     @abstractmethod
+    def _get_bytes(self, key: str) -> bytes | None:
+        pass
+
     def get_bytes(self, key: str) -> bytes | None:
         """Gets a bytes value from the cache."""
-        pass
+        self._stats.gets += 1
+        if (cached := self._get_bytes(key)) is not None:
+            self._stats.hits += 1
+        else:
+            self._stats.misses += 1
+        return cached
 
     @abstractmethod
+    def _set_bytes(self, key: str, value: bytes) -> None:
+        pass
+
     def set_bytes(self, key: str, value: bytes) -> None:
         """Sets a bytes value in the cache."""
-        pass
+        self._stats.sets += 1
+        self._set_bytes(key, value)
 
     @abstractmethod
+    def _delete(self, key: str) -> None:
+        pass
+
     def delete(self, key: str) -> None:
         """Deletes a value from the cache."""
-        pass
+        self._stats.deletes += 1
+        self._delete(key)
 
     @abstractmethod
+    def _clear(self) -> None:
+        pass
+
     def clear(self) -> None:
         """Clears the cache."""
-        pass
+        self._stats.clears += 1
+        self._clear()
 
     @abstractmethod
+    def _hit(self, key: str) -> bool:
+        pass
+
     def hit(self, key: str) -> bool:
         """Checks if a key exists in the cache."""
-        pass
+        return self._hit(key)
 
 
 class InMemoryCache(Cache):
@@ -195,16 +285,16 @@ class InMemoryCache(Cache):
         self.max_size = max_size
         self.cache = cachetools.TTLCache[str, str](maxsize=self.max_size, ttl=self.default_ttl)
 
-    def get(self, key: str) -> str | None:
+    def _get(self, key: str) -> str | None:
         return self.cache.get(self._key(key))
 
-    def set(self, key: str, value: str) -> None:
+    def _set(self, key: str, value: str) -> None:
         self.cache[self._key(key)] = value
 
-    def set_bytes(self, key: str, value: bytes) -> None:
+    def _set_bytes(self, key: str, value: bytes) -> None:
         self.cache[self._key(key)] = b64encode(value).decode("ascii")
 
-    def get_bytes(self, key: str) -> bytes | None:
+    def _get_bytes(self, key: str) -> bytes | None:
         if (cached := self.cache.get(self._key(key))) is None:
             return None
         try:
@@ -212,13 +302,13 @@ class InMemoryCache(Cache):
         except Exception as error:
             raise CachingError(f"Failed to decode cached key {key!r}, make sure it was stored as bytes.") from error
 
-    def delete(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         self.cache.pop(self._key(key), None)
 
-    def clear(self) -> None:
+    def _clear(self) -> None:
         self.cache.clear()
 
-    def hit(self, key: str) -> bool:
+    def _hit(self, key: str) -> bool:
         return self._key(key) in self.cache
 
 
@@ -249,7 +339,7 @@ class LocalFileCache(Cache):
     def _assert_root_path(self) -> None:
         self.root_path.mkdir(parents=True, exist_ok=True)
 
-    def cleanup(self) -> None:
+    def _cleanup(self) -> None:
         """Clean up all expired files from the cache."""
         self._assert_root_path()
         for key_path in self.root_path.iterdir():
@@ -263,16 +353,16 @@ class LocalFileCache(Cache):
 
     @overload
     @contextmanager
-    def open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
+    def _open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
         pass
 
     @overload
     @contextmanager
-    def open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
+    def _open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
         pass
 
     @contextmanager
-    def open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[str] | IO[bytes]]:
+    def _open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[str] | IO[bytes]]:
         self.hit(key)  # this should expire the file if needed
         if self.use_compression:
             logger.warning(
@@ -280,7 +370,7 @@ class LocalFileCache(Cache):
                 "It compresses the content in-memory. For now, you should consider using "
                 "use_compression=False and utilizing e.g. snappy or gzip manually."
             )
-            with super().open(key, mode) as file:
+            with super()._open(key, mode) as file:
                 yield file
             return
         key_path = self._key_path(key)
@@ -299,7 +389,7 @@ class LocalFileCache(Cache):
             key_path.unlink(missing_ok=True)
 
     def shrink_to_fit_max_size(self) -> None:
-        self.cleanup()
+        self._cleanup()
         if not self.max_size or self.max_size < 0:
             return
         total_size = self.get_total_size()
@@ -323,12 +413,12 @@ class LocalFileCache(Cache):
         current_time = time.time()
         return (current_time - key.stat().st_mtime) > self.default_ttl
 
-    def get(self, key: str) -> str | None:
-        if (cached := self.get_bytes(key)) is None:
+    def _get(self, key: str) -> str | None:
+        if (cached := self._get_bytes(key)) is None:
             return None
         return cached.decode("utf-8")
 
-    def get_bytes(self, key: str) -> bytes | None:
+    def _get_bytes(self, key: str) -> bytes | None:
         self._assert_root_path()
         if not self.hit(key):
             return None
@@ -339,7 +429,7 @@ class LocalFileCache(Cache):
             return self._decompress_bytes(content)
         return content
 
-    def _set(self, key: str, value: str | bytes) -> None:
+    def _perform_set(self, key: str, value: str | bytes) -> None:
         self._assert_root_path()
         key_path = self._key_path(key)
         logger.debug("Storing key into a file.", key=key, path=key_path.as_posix())
@@ -348,13 +438,13 @@ class LocalFileCache(Cache):
         content = self._compress_bytes(value) if self.use_compression else value
         key_path.write_bytes(content)
 
-    def set(self, key: str, value: str) -> None:
-        return self._set(key, value)
+    def _set(self, key: str, value: str) -> None:
+        return self._perform_set(key, value)
 
-    def set_bytes(self, key: str, value: bytes) -> None:
-        return self._set(key, value)
+    def _set_bytes(self, key: str, value: bytes) -> None:
+        return self._perform_set(key, value)
 
-    def delete(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         self._assert_root_path()
         key_path = self._key_path(key)
         if not key_path.exists():
@@ -362,7 +452,7 @@ class LocalFileCache(Cache):
         logger.debug("Removing cached key.", key=key, path=key_path.as_posix())
         key_path.unlink()
 
-    def hit(self, key: str) -> bool:
+    def _hit(self, key: str) -> bool:
         key_path = self._key_path(key)
         if not key_path.exists():
             return False
@@ -372,7 +462,7 @@ class LocalFileCache(Cache):
             return False
         return True
 
-    def clear(self) -> None:
+    def _clear(self) -> None:
         self._assert_root_path()
         for file in self.root_path.iterdir():
             if not file.is_file():
@@ -439,7 +529,7 @@ class PersistentCache(Cache):
         data = ({"key": key, "value": value, "timestamp": timestamp} for key, value in self._data.items())
         self.catalog.store_asset(self.asset, data)
 
-    def get(self, key: str) -> str | None:
+    def _get(self, key: str) -> str | None:
         cache_key = self._key(key)
         return self.data.get(cache_key)
 
@@ -449,30 +539,30 @@ class PersistentCache(Cache):
             raise RuntimeError("Persistent cache must be used as a context manager.")
         return self._data
 
-    def set(self, key: str, value: str) -> None:
+    def _set(self, key: str, value: str) -> None:
         cache_key = self._key(key)
         self.data[cache_key] = value
 
-    def set_bytes(self, key: str, value: bytes) -> None:
-        return self.set(key, b64encode(value).decode("ascii"))
+    def _set_bytes(self, key: str, value: bytes) -> None:
+        return self._set(key, b64encode(value).decode("ascii"))
 
-    def get_bytes(self, key: str) -> bytes | None:
-        if (cached := self.get(key)) is None:
+    def _get_bytes(self, key: str) -> bytes | None:
+        if (cached := self._get(key)) is None:
             return None
         try:
             return b64decode(cached.encode("ascii"))
         except Exception as error:
             raise CachingError(f"Failed to decode cached key {key!r}, make sure it was stored as bytes.") from error
 
-    def delete(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         cache_key = self._key(key)
         if cache_key in self.data:
             del self.data[cache_key]
 
-    def clear(self) -> None:
+    def _clear(self) -> None:
         self.data.clear()
 
-    def hit(self, key: str) -> bool:
+    def _hit(self, key: str) -> bool:
         return self._key(key) in self.data
 
 
@@ -491,15 +581,15 @@ class DynamoDBCache(Cache):
         self.table_name = table_name
         self.table = self.client.Table(table_name)
 
-    def get(self, key: str) -> str | None:
-        if (cached := self.get_bytes(key)) is None:
+    def _get(self, key: str) -> str | None:
+        if (cached := self._get_bytes(key)) is None:
             return None
         return cached.decode("utf-8")
 
-    def set(self, key: str, value: str) -> None:
-        return self.set_bytes(key, value.encode("utf-8"))
+    def _set(self, key: str, value: str) -> None:
+        return self._set_bytes(key, value.encode("utf-8"))
 
-    def set_bytes(self, key: str, value: bytes) -> None:
+    def _set_bytes(self, key: str, value: bytes) -> None:
         expiration_time = int(time.time()) + self.default_ttl
         cache_key = self._key(key)
         compressed_value = self._compress_bytes(value)
@@ -515,7 +605,7 @@ class DynamoDBCache(Cache):
             Item={"key": cache_key, "value": compressed_value, self.TTL_ATTRIBUTE_NAME: expiration_time}
         )
 
-    def get_bytes(self, key: str) -> bytes | None:
+    def _get_bytes(self, key: str) -> bytes | None:
         cache_key = self._key(key)
         response = self.table.get_item(Key={"key": cache_key})
         item = response.get("Item")
@@ -523,11 +613,11 @@ class DynamoDBCache(Cache):
             return self._decompress_bytes(bytes(cast(Any, item["value"])))
         return None
 
-    def delete(self, key: str) -> None:
+    def _delete(self, key: str) -> None:
         key = self._key(key)
         self.table.delete_item(Key={"key": key})
 
-    def clear(self) -> None:
+    def _clear(self) -> None:
         """
         Deletes all items in the table.
 
@@ -539,7 +629,7 @@ class DynamoDBCache(Cache):
             for item in scan["Items"]:
                 batch.delete_item(Key={"key": item["key"]})
 
-    def hit(self, key: str) -> bool:
+    def _hit(self, key: str) -> bool:
         cache_key = self._key(key)
         item = self.table.get_item(Key={"key": cache_key}, ProjectionExpression=self.TTL_ATTRIBUTE_NAME).get("Item")
         if not item:

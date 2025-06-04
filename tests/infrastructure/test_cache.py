@@ -1,13 +1,14 @@
 import os
 from base64 import b64encode
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from time import sleep
 
 import boto3
 import pytest
 
-from hyperion.infrastructure.cache import Cache, CachingError, DynamoDBCache, InMemoryCache, LocalFileCache
+from hyperion.infrastructure.cache import Cache, CacheStats, CachingError, DynamoDBCache, InMemoryCache, LocalFileCache
 
 DYNAMODB_TABLE = "test-table"
 
@@ -181,6 +182,54 @@ class TestCache:
             assert instance.get_bytes("mixed") == b"is a string"
 
 
+@contextmanager
+def _expect(instance: Cache, **changes: int) -> Iterator[None]:
+    before = instance.stats
+    yield
+    after = instance.stats
+    assert after - before == changes, f"Expected following stats changes: {changes}"
+
+
+@pytest.mark.parametrize(
+    "instance",
+    ["dynamodb_cache", "in_memory_cache", "local_file_cache", "local_file_cache_no_compression"],
+    indirect=True,
+)
+def test_cache_stats(instance: Cache) -> None:
+    stats_fields = {"clears", "deletes", "gets", "hits", "misses", "sets"}
+    for field in stats_fields:
+        assert getattr(instance.stats, field) == 0
+    with _expect(instance):
+        instance.hit("does not exist")
+    with _expect(instance, gets=1, misses=1):
+        instance.get("does not exist")
+    with _expect(instance, sets=1):
+        instance.set("exists now", "true")
+    with _expect(instance, gets=1, hits=1):
+        instance.get("exists now")
+    with _expect(instance, gets=2, hits=2):
+        instance.get("exists now")
+        instance.get("exists now")
+    with _expect(instance, sets=1, gets=1), instance.open("this is new", mode="str") as file:
+        file.write("test")
+    with _expect(instance, gets=1, misses=1):
+        instance.get_bytes("nonexistent bytes")
+    with _expect(instance, sets=1):
+        instance.set_bytes("now existent bytes", b"test")
+    with _expect(instance, gets=1, hits=1):
+        instance.get_bytes("now existent bytes")
+    with _expect(instance, sets=1):
+        instance.set("another key", "test")
+    assert instance.stats.deletes == 0, "no operation up until now should have updated deletes"
+    assert instance.stats.clears == 0, "no operation up until now should have updated clears"
+    with _expect(instance, deletes=1):
+        instance.delete("does not exist")
+    with _expect(instance, deletes=1):
+        instance.delete("exists now")
+    with _expect(instance, clears=1):
+        instance.clear()
+
+
 @pytest.mark.parametrize("local_file_cache_maxsize", [1024], indirect=True)
 def test_local_file_cache_cleanup(local_file_cache_maxsize: LocalFileCache) -> None:
     local_file_cache_maxsize.set_bytes("large", os.urandom(4096))
@@ -203,3 +252,9 @@ def test_local_file_cache_empty_is_deleted_on_close(local_file_cache_no_compress
     with local_file_cache_no_compression.open("test-autodelete", "str") as _:
         pass
     assert not local_file_cache_no_compression.hit("test-autodelete")
+
+
+def test_cache_stats_subtraction() -> None:
+    a = CacheStats(hits=69, misses=420, gets=42, deletes=1, clears=2, sets=7)
+    b = CacheStats(hits=1, misses=1, gets=2, deletes=2, clears=0, sets=5)
+    assert a - b == {"hits": 68, "misses": 419, "gets": 40, "deletes": -1, "sets": 2, "clears": 2}
