@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         name: Checkout
+        with:
+          lfs: true
       - uses: ./.github/actions/install-all
         with:
           python-version: "${{matrix.python-version}}"
