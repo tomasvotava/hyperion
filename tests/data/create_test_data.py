@@ -21,7 +21,9 @@ _TEST_DATA_DIR = Path(__file__).parent
 
 def _parse_datetimes(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        column: datetime.datetime.fromisoformat(value).astimezone(datetime.timezone.utc) if column == "date" else value
+        column: datetime.datetime.fromisoformat(value).replace(tzinfo=datetime.timezone.utc)
+        if column == "date"
+        else value
         for column, value in row.items()
     }
 

@@ -79,7 +79,7 @@ def _create_fake_data_lake(data_dir: Path, s3client: "S3Client") -> None:
 def _create_fake_feature_store(data_dir: Path, s3client: "S3Client") -> None:
     for feature_file in (data_dir / "assets").glob("superfeature.*.v1.avro"):
         partition_date_str = feature_file.name.split(".")[1]
-        partition_date = assure_timezone(datetime.date.fromisoformat(partition_date_str))
+        partition_date = assure_timezone(datetime.datetime.fromisoformat(partition_date_str))
         _create_fake_asset("superfeature.1d", s3client, partition_date, "feature", feature_file)
 
 
@@ -156,9 +156,7 @@ def _get_test_asset_data(asset_name: str, data_dir: Path) -> list[dict[str, Any]
             raise TypeError(f"Unexpected test data type, expected 'list', got {type(data)!r}.")
         return [
             {
-                key: datetime.datetime.fromisoformat(value).astimezone(datetime.timezone.utc)
-                if key == "date"
-                else value
+                key: assure_timezone(datetime.datetime.fromisoformat(value)) if key == "date" else value
                 for key, value in row.items()
             }
             for row in data
