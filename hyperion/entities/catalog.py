@@ -143,6 +143,10 @@ class FeatureAsset:
     schema_version: int = 1
     partition_keys: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.resolution, TimeResolution):
+            object.__setattr__(self, "resolution", TimeResolution.from_str(self.resolution))
+
     @property
     def time_resolution(self) -> TimeResolution:
         """The time resolution of the feature."""

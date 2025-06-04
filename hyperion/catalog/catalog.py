@@ -395,7 +395,12 @@ class Catalog:
     def _download_asset_into_file(self, asset: AssetProtocol, file: IO[bytes]) -> None:
         store_config = self.get_store_config(asset)
         logger.info("Downloading asset into a file.", asset=asset, path=getattr(file, "name", None) or "unnamed")
-        self.s3_client.download(store_config["bucket"], asset.get_path(store_config["prefix"]), file)
+        try:
+            self.s3_client.download(store_config["bucket"], asset.get_path(store_config["prefix"]), file)
+        except botocore.exceptions.ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "404":
+                raise AssetNotFoundError(asset) from error
+            raise
 
     @contextmanager
     def _get_asset_file_handle(self, asset: AssetProtocol, *, no_cache: bool = False) -> Iterator[IO[bytes]]:
