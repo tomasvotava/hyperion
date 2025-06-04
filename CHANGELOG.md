@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 (2025-06-04)
+
+### Feat
+
+- add stats for cache implementations
+
 ## 0.7.1 (2025-06-02)
 
 ### Fix
