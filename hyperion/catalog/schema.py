@@ -42,6 +42,17 @@ class SchemaStore(abc.ABC):
         return self.get_schema(asset.name, asset.schema_version, asset_type=asset.asset_type)
 
     @abc.abstractmethod
+    def get_schema_from_path(self, schema_path: str) -> dict[str, Any]:
+        """Get the schema given by its path.
+
+        Args:
+            schema_path (str): The path to the schema.
+
+        Returns:
+            dict[str, Any]: The schema.
+        """
+
+    @abc.abstractmethod
     def get_schema(self, asset_name: str, schema_version: int, asset_type: AssetType) -> dict[str, Any]:
         """Get the schema for the asset with the given name and version."""
 
@@ -102,6 +113,15 @@ class LocalSchemaStore(SchemaStore):
             logger.critical("Provided schemas path does not exist.", schemas_path=schemas_path.as_posix())
             raise FileNotFoundError("Provided schemas path does not exist.")
 
+    def get_schema_from_path(self, schema_path: str) -> dict[str, Any]:
+        path = Path(schema_path)
+        logger.info("Reading avro schema from stored json file.", path=path.as_posix())
+        with path.open("r", encoding="utf-8") as file:
+            schema = json.load(file)
+        if not isinstance(schema, dict):
+            raise TypeError(f"Schema has unexpected type {type(schema)}, expected 'dict'.")
+        return schema
+
     def get_schema(self, asset_name: str, schema_version: int, asset_type: AssetType) -> dict[str, Any]:
         path = self.schemas_path / asset_type / f"{asset_name}.v{schema_version}.avro.json"
         logger.info(
@@ -110,20 +130,7 @@ class LocalSchemaStore(SchemaStore):
             asset_name=asset_name,
             asset_type=asset_type,
         )
-        try:
-            with path.open("r", encoding="utf-8") as file:
-                schema = json.load(file)
-            if not isinstance(schema, dict):
-                raise TypeError(f"Schema has unexpected type {type(schema)}, expected 'dict'.")
-            return schema
-        except Exception:
-            logger.critical(
-                "Failed to get avro schema from stored json file.",
-                path=path.as_posix(),
-                asset_name=asset_name,
-                asset_type=asset_type,
-            )
-            raise
+        return self.get_schema_from_path(path.as_posix())
 
 
 @lru_cache(maxsize=256)
@@ -146,11 +153,14 @@ class S3SchemaStore(SchemaStore):
         self.prefix = prefix
         self.s3_client = S3Client()
 
+    def get_schema_from_path(self, schema_path: str) -> dict[str, Any]:
+        logger.info("Getting avro schema from S3.", bucket=self.bucket, key=schema_path)
+        try:
+            return _get_schema_from_s3(self.bucket, schema_path, self.s3_client)
+        except Exception:
+            logger.critical("Failed to get avro schema from S3.", bucket=self.bucket, key=schema_path)
+            raise
+
     def get_schema(self, asset_name: str, schema_version: int, asset_type: AssetType) -> dict[str, Any]:
         key = f"{asset_type}/{asset_name}.v{schema_version}.avro.json"
-        logger.info("Getting avro schema from S3.", bucket=self.bucket, key=key)
-        try:
-            return _get_schema_from_s3(self.bucket, key, self.s3_client)
-        except Exception:
-            logger.critical("Failed to get avro schema from S3.", bucket=self.bucket, key=key)
-            raise
+        return self.get_schema_from_path(key)

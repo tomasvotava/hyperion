@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import boto3
+import fastavro
 import pytest
 
 from hyperion.catalog.catalog import AssetNotFoundError, Catalog
@@ -90,11 +91,12 @@ def _test_data(data_dir: Path, s3client: "S3Client") -> None:
 
 
 @pytest.fixture(name="test_tmp_dir", scope="session")
-def _test_tmp_dir() -> Iterator[Path]:
+def _test_tmp_dir(data_dir: Path) -> Iterator[Path]:
     with tempfile.TemporaryDirectory(prefix="tmphyp_") as tmpdir:
         tmp_path = Path(tmpdir)
         (tmp_path / "schemas").mkdir(parents=True)
         (tmp_path / "cache").mkdir(parents=True)
+        (tmp_path / "schemas/custom_schema.json").write_text((data_dir / "assets/custom_schema.json").read_text())
         yield tmp_path
 
 
@@ -244,6 +246,25 @@ class TestCatalog:
         partition = catalog.find_latest_datalake_partition("places", date_part)
         assert partition == DataLakeAsset("places", PLACES_PARTITION_DATES[0])
         assert partition != DataLakeAsset("places", PLACES_PARTITION_DATES[-1]), "Test data inconsistency"
+
+    def test_store_asset_with_custom_schema(self, catalog: Catalog) -> None:
+        assert isinstance(catalog.schema_store, LocalSchemaStore), "This test only works with LocalSchemaStore"
+        schema_path = catalog.schema_store.schemas_path / "custom_schema.json"
+        catalog.store_asset(
+            DataLakeAsset("nonsensical", utcnow()),
+            [{"id": "some id", "custom": True}],
+            schema_path=schema_path.as_posix(),
+        )
+
+    def test_store_asset_custom_schema_raises(self, catalog: Catalog) -> None:
+        assert isinstance(catalog.schema_store, LocalSchemaStore), "This test only works with LocalSchemaStore"
+        schema_path = catalog.schema_store.schemas_path / "custom_schema.json"
+        with pytest.raises(fastavro.validation.ValidationError, match=".*Field.Custom.id. is None expected string.*"):
+            catalog.store_asset(
+                DataLakeAsset("does it even make sense", utcnow()),
+                [{"this schema": "is invalid"}],
+                schema_path=schema_path.as_posix(),
+            )
 
     @pytest.mark.parametrize(
         "asset",

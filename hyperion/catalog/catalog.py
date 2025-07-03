@@ -266,9 +266,15 @@ class Catalog:
         )
 
     @contextmanager
-    def _prepare_asset_storage(self, asset: AssetProtocol, data: Iterable[dict[str, Any]]) -> Iterator[IO[bytes]]:
+    def _prepare_asset_storage(
+        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
+    ) -> Iterator[IO[bytes]]:
         with tempfile.NamedTemporaryFile("+wb") as file:
-            schema = self.schema_store.get_asset_schema(asset)
+            schema = (
+                self.schema_store.get_asset_schema(asset)
+                if schema_path is None
+                else self.schema_store.get_schema_from_path(schema_path)
+            )
             path = Path(file.name)
             logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
             _write_avro(file, schema, data, asset.to_metadata())
@@ -277,7 +283,7 @@ class Catalog:
             yield file
 
     async def store_asset_async(
-        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True
+        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True, schema_path: str | None = None
     ) -> None:
         """Store an asset in its bucket asynchronously.
 
@@ -289,7 +295,7 @@ class Catalog:
         store_config = self.get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
         with ExitStack() as stack:
-            file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data))
+            file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data, schema_path))
             await self.s3_client.upload_async(
                 file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
             )
@@ -328,7 +334,9 @@ class Catalog:
             return self.retrieve_asset(feature_asset)
         raise AssetNotFoundError(feature_asset)
 
-    def store_asset(self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True) -> None:
+    def store_asset(
+        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True, schema_path: str | None = None
+    ) -> None:
         """Store an asset in its bucket.
 
         Args:
@@ -338,7 +346,7 @@ class Catalog:
         """
         store_config = self.get_store_config(asset)
         logger.info("Preparing asset storage.", asset=asset, **store_config)
-        with self._prepare_asset_storage(asset, data) as file:
+        with self._prepare_asset_storage(asset, data, schema_path) as file:
             self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
         if notify:
             self._notify_asset_arrival(asset)
