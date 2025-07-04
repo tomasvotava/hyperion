@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.1 (2025-07-04)
+
+### Fix
+
+- source asset should pass schema_path to catalog
+
 ## 0.9.0 (2025-07-04)
 
 ### Feat
