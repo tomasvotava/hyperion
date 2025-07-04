@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 (2025-07-04)
+
+### Feat
+
+- add support for custom schemas in asset storage
+
 ## 0.8.0 (2025-06-04)
 
 ### Feat
