@@ -4,7 +4,7 @@ from typing import Any, ClassVar, cast
 
 import pandera.engines.polars_engine as polars_engine
 import pandera.errors
-import pandera.typing as pt
+import pandera.typing.polars as pt
 import polars
 import pytest
 from pydantic import BaseModel

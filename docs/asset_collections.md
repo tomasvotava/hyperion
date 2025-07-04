@@ -42,7 +42,7 @@ class WeatherFeature(FeatureModel, BaseModel):
 For large datasets or analytics workloads, create a model using `PolarsFeatureModel`:
 
 ```python
-import pandera.typing as pt
+import pandera.typing.polars as pt
 from typing import Annotated, ClassVar
 from pandera.engines.polars_engine import DateTime, Float64
 from hyperion.entities.catalog import PolarsFeatureModel
