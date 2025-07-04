@@ -26,6 +26,7 @@ logger = get_logger("hyperion-source")
 class SourceAsset:
     asset: DataLakeAsset
     data: Iterable[dict[str, Any]]
+    schema_path: str | None = None
 
 
 class Source(abc.ABC):
@@ -58,11 +59,19 @@ class Source(abc.ABC):
             if isinstance(result, AsyncIterator):
                 async for asset in result:
                     logger.info("Processing asset retrieved from source.", asset=asset.asset)
-                    await queue.add_task(source.catalog.store_asset_async(asset.asset, asset.data, notify=notify))
+                    await queue.add_task(
+                        source.catalog.store_asset_async(
+                            asset.asset, asset.data, notify=notify, schema_path=asset.schema_path
+                        )
+                    )
             else:
                 for asset in await result:
                     logger.info("Processing asset retrieved from source.", asset=asset.asset)
-                    await queue.add_task(source.catalog.store_asset_async(asset.asset, asset.data, notify=notify))
+                    await queue.add_task(
+                        source.catalog.store_asset_async(
+                            asset.asset, asset.data, notify=notify, schema_path=asset.schema_path
+                        )
+                    )
 
     @classmethod
     def handle_aws_lambda_event(
