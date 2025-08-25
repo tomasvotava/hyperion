@@ -17,5 +17,3 @@ Releases are done automatically using GitHub Actions on every commit to `master`
 The workflow will create a `release/x.y.z` branch and an associated pull request.
 After review of the release and merging the pull request, the release will be published as a tag
 and a GitHub release will be created.
-
-So far, no PyPI package exists for this project.
