@@ -1,3 +1,5 @@
+from typing import Any
+
 from dotenv import find_dotenv, load_dotenv
 from env_proxy import EnvConfig, EnvProxy, Field
 
@@ -46,6 +48,8 @@ class QueueConfig(EnvConfig):
     env_proxy = EnvProxy(prefix="HYPERION_QUEUE")
 
     url: str | None = Field(description="The URL of the SQS queue.", default=None)
+    path: str | None = Field(description="The file path of the file queue.", default=None)
+    path_overwrite: bool = Field(description="If true and queue path exists, it will be overwritten.", default=False)
 
 
 class SecretsConfig(EnvConfig):
@@ -69,9 +73,16 @@ class HttpConfig(EnvConfig):
     proxy_https: str | None = Field(default=None)
 
 
+class SourceConfig(EnvConfig):
+    env_proxy = EnvProxy(prefix="HYPERION_SOURCE")
+
+    params: dict[str, Any] | list[Any] | None = Field(default=None, type_hint="json")
+
+
 config = CommonConfig()
 storage_config = StorageConfig()
 geo_config = GeoConfig()
 queue_config = QueueConfig()
 secrets_config = SecretsConfig()
 http_config = HttpConfig()
+source_config = SourceConfig()
