@@ -1,6 +1,7 @@
 import abc
 import datetime
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -106,10 +107,10 @@ def create_backfill_event(
 
 
 class Queue(abc.ABC):
-    _cached_instance: ClassVar["Queue | None"] = None
+    _cached_instance: "ClassVar[Queue | None]" = None
 
     @staticmethod
-    def _create_from_config() -> "Queue":
+    def _resolve_type_from_config() -> "type[Queue]":
         if queue_config.url and queue_config.path:
             logger.warning(
                 "Ambiguous configuration detected - both queue URL and queue path were set. Will default to SQS queue.",
@@ -117,19 +118,39 @@ class Queue(abc.ABC):
                 queue_path=queue_config.path,
             )
         if queue_config.url is not None:
+            return SQSQueue
+        if queue_config.path is not None:
+            return FileQueue
+        return InMemoryQueue
+
+    @classmethod
+    def _create_from_config(cls) -> "Queue":
+        queue_type = cls._resolve_type_from_config()
+        logger.info(
+            "Resolved queue type from configuration.",
+            queue_type=queue_type,
+            env={k: v for k, v in os.environ.items() if k.lower().startswith("hyperion")},
+        )
+        if queue_type is SQSQueue and queue_config.url is not None:
             logger.info("Using SQS queue.")
             return SQSQueue(queue_config.url)
-        if queue_config.path is not None:
+        if queue_type is FileQueue and queue_config.path is not None:
             logger.info("Using FileQueue.")
             return FileQueue(Path(queue_config.path), overwrite=queue_config.path_overwrite)
-        if queue_config.url is None:
+        if queue_type is InMemoryQueue:
             logger.info("Using in-memory queue.")
             return InMemoryQueue()
+        raise ValueError(f"Unknown queue type {queue_type!r} or missing configuration options.")
 
     @classmethod
     def from_config(cls) -> "Queue":
         if cls._cached_instance is None:
             cls._cached_instance = cls._create_from_config()
+        if cls._cached_instance.__class__ is not (resolved_type := cls._resolve_type_from_config()):
+            raise RuntimeError(
+                f"Configuration inconsistency - cached queue instance is of type {type(cls._cached_instance)!r}, "
+                f"but type requested by configuration is {resolved_type!r}."
+            )
         return cls._cached_instance
 
     @abc.abstractmethod

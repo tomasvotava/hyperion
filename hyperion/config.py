@@ -47,9 +47,11 @@ class StorageConfig(EnvConfig):
 class QueueConfig(EnvConfig):
     env_proxy = EnvProxy(prefix="HYPERION_QUEUE")
 
-    url: str | None = Field(description="The URL of the SQS queue.", default=None)
-    path: str | None = Field(description="The file path of the file queue.", default=None)
-    path_overwrite: bool = Field(description="If true and queue path exists, it will be overwritten.", default=False)
+    url: str | None = Field(description="The URL of the SQS queue.", default=None, allow_set=True)
+    path: str | None = Field(description="The file path of the file queue.", default=None, allow_set=True)
+    path_overwrite: bool = Field(
+        description="If true and queue path exists, it will be overwritten.", default=False, allow_set=True
+    )
 
 
 class SecretsConfig(EnvConfig):
