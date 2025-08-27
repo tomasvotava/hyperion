@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hyperion-sdk"
-version = "0.9.1"
+version = "0.10.0"
 description = "A headless ETL / ELT / data pipeline and integration SDK for Python."
 authors = ["Tomas Votava <info@tomasvotava.eu>"]
 readme = "README.md"

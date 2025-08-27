@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0 (2025-08-27)
+
+### Feat
+
+- allow testing Sources with lambda events locally, add support for source backfill
+- add CLI for running sources with configurable parameters and file queue
+- make sources able to run independently from lambda (e.g. in Argo Workflows), add optional `params` to Source
+
 ## 0.9.1 (2025-07-04)
 
 ### Fix
