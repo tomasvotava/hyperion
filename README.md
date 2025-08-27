@@ -17,6 +17,7 @@ A headless ETL / ELT / data pipeline and integration SDK for Python.
 - **Source Framework**: Define data sources that extract data and store in the catalog
 - **Caching**: In-memory, local file, and DynamoDB caching options
 - **Asynchronous Processing**: Utilities for async operations and task queues
+- **CLI Runner**: Run sources in standalone or Argo Workflow mode with click-based commands
 - **Geo Utilities**: Location-based services with Google Maps integration
 - **Catalog Caching**: Cache downloaded assets for faster repeated access
 - **Asset Collections**: High-level interface for working with groups of assets
@@ -128,7 +129,11 @@ HYPERION_STORAGE_SCHEMA_PATH=s3://my-schema-bucket/schemas
 HYPERION_STORAGE_MAX_CONCURRENCY=5
 
 # Queue settings
+## SQS Queue
 HYPERION_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/my-queue
+## OR file queue (local)
+HYPERION_QUEUE_PATH=/tmp/hyperion-queue.json
+HYPERION_QUEUE_PATH_OVERWRITE=True                # Overwrite queue file if exists (default: False)
 
 # Secrets settings
 HYPERION_SECRETS_BACKEND=AWSSecretsManager
@@ -145,6 +150,9 @@ HYPERION_STORAGE_CACHE_DYNAMODB_TABLE=my-cache-table  # Optional DynamoDB table 
 HYPERION_STORAGE_CACHE_DYNAMODB_DEFAULT_TTL=3600      # Default TTL for cache items (seconds)
 HYPERION_STORAGE_CACHE_LOCAL_PATH=/tmp/hyperion-cache # Path for local file cache
 HYPERION_STORAGE_CACHE_KEY_PREFIX=my-prefix           # Optional prefix for cache keys
+
+# Source parameters (optional)
+HYPERION_SOURCE_PARAMS={"key": "value"}           # Pass JSON as environment variable to the source
 ```
 
 Before any real documentation is written, you can check the
@@ -314,6 +322,43 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     asyncio.run(MyCustomSource._run(Catalog.from_config()))
 ```
+
+#### Running source directly ('Argo Workflow' mode)
+
+Hyperion provides a `SourceRunner` that generates CLI for your sources.
+
+`running_sources.py`
+
+```python
+from hyperion.sources.cli import SourceRunner
+from my_sources import FirstSource, SecondSource
+
+if __name__ == "__main__":
+    SourceRunner(FirstSource, SecondSource).cli()
+```
+
+You can then invoke your source from the command line:
+
+```bash
+python running_sources.py <first-source | second-source> run \
+    --start-date 2025-01-01 \
+    --end-date 2025-02-01 \
+    --params '{"foo": "bar"}' \
+    --queue-file /argo/output/messages.json \
+    --queue-overwrite
+```
+
+Generated options (all options are optional):
+
+- `--start-date` start date passed on to the source
+- `--end-date` end date passed on to the source
+- `--params` JSON string containing source-specific params
+- `--params-from` a path to JSON file containing source-specific params
+- `--queue-file` output file for queued messages
+- `--queue-overwrite` overwrite queue file if it already exists
+
+The name of the command (`first-source`, `second-source`, etc.) comes from the `source` attribute of your
+`Source` subclass.
 
 ### Working with Schemas
 
