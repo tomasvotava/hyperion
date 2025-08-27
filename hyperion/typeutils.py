@@ -2,7 +2,7 @@ import datetime
 from collections.abc import Sequence
 from dataclasses import asdict
 from inspect import isclass
-from typing import TYPE_CHECKING, Annotated, Any, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Protocol, TypeAlias, TypeVar
 
 import pandera
 import pandera.engines
@@ -129,3 +129,12 @@ def dataclass_asdict(
             if (include and field not in include) or field in exclude:
                 del dct[field]
     return dct
+
+
+class TypedDictProtocol(Protocol):
+    __required_keys__: ClassVar[frozenset[str]]
+    __optional_keys__: ClassVar[frozenset[str]]
+
+
+def is_typed_dict_instance(obj: dict[Any, Any], typed_dict: type[TypedDictProtocol]) -> bool:
+    return set(obj.keys()).intersection(typed_dict.__required_keys__) == typed_dict.__required_keys__
