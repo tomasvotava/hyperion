@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0 (2025-09-29)
+
+### Feat
+
+- add iter_intervals to dateutils
+
 ## 0.10.0 (2025-08-27)
 
 ### Feat
