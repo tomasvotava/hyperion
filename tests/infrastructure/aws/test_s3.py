@@ -20,7 +20,7 @@ def _bucket(_moto_server: None) -> None:
 
 def test_s3_download_nonexisting() -> None:
     client = S3Client()
-    with pytest.raises(botocore.exceptions.ClientError, match="An error occurred .NoSuchKey."):
+    with pytest.raises(botocore.exceptions.ClientError, match=r"An error occurred .NoSuchKey."):
         client.get_object_attributes(TEST_BUCKET, "test.txt")
 
 

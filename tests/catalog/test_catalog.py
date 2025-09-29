@@ -228,12 +228,12 @@ class TestCatalog:
     def test_retrieve_nonexistent(self, catalog: Catalog) -> None:
         foobar = DataLakeAsset("foobar", utcnow())
         data = catalog.retrieve_asset(foobar)
-        with pytest.raises(AssetNotFoundError, match="Asset 'foobar' not found in the catalog."):
+        with pytest.raises(AssetNotFoundError, match=r"Asset 'foobar' not found in the catalog."):
             next(data)
 
     def test_get_size_nonexistent(self, catalog: Catalog) -> None:
         foobar = DataLakeAsset("foobar", utcnow())
-        with pytest.raises(AssetNotFoundError, match="Asset 'foobar' not found in the catalog."):
+        with pytest.raises(AssetNotFoundError, match=r"Asset 'foobar' not found in the catalog."):
             catalog.get_asset_file_size(foobar)
 
     def test_get_latest_datalake_partition(self, catalog: Catalog) -> None:
@@ -259,7 +259,7 @@ class TestCatalog:
     def test_store_asset_custom_schema_raises(self, catalog: Catalog) -> None:
         assert isinstance(catalog.schema_store, LocalSchemaStore), "This test only works with LocalSchemaStore"
         schema_path = catalog.schema_store.schemas_path / "custom_schema.json"
-        with pytest.raises(fastavro.validation.ValidationError, match=".*Field.Custom.id. is None expected string.*"):
+        with pytest.raises(fastavro.validation.ValidationError, match=r".*Field.Custom.id. is None expected string.*"):
             catalog.store_asset(
                 DataLakeAsset("does it even make sense", utcnow()),
                 [{"this schema": "is invalid"}],

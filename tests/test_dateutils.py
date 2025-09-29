@@ -48,7 +48,7 @@ def test_time_resolution_good_expression(expr: str, resolution: TimeResolution) 
     ],
 )
 def test_time_resolution_wrong_expression(expr: str) -> None:
-    with pytest.raises(ValueError, match="Invalid time resolution specification '.*'."):
+    with pytest.raises(ValueError, match=r"Invalid time resolution specification '.*'."):
         TimeResolution.from_str(expr)
 
 
@@ -101,7 +101,7 @@ def test_truncate_datetime(base: datetime.datetime, unit: TimeResolutionUnit, ex
     ],
 )
 def test_truncate_datetime_invalid_unit(unit: Any) -> None:
-    with pytest.raises(ValueError, match=f"Unknown time unit '{unit}'. Pick one of.*"):
+    with pytest.raises(ValueError, match=rf"Unknown time unit '{unit}'. Pick one of.*"):
         truncate_datetime(utc_datetime(2023, 10, 5, 14, 30, 45, 123456), unit)
 
 
