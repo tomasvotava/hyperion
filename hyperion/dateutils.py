@@ -1,6 +1,6 @@
 import datetime
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, cast
 
@@ -236,3 +236,21 @@ def get_date_pattern(date: datetime.datetime, unit: TimeResolutionUnit) -> str:
 
 def utcnow() -> datetime.datetime:
     return datetime.datetime.now(tz=datetime.timezone.utc)
+
+
+def iter_intervals(
+    start_date: datetime.datetime, end_date: datetime.datetime, granularity: TimeResolutionUnit
+) -> Iterable[tuple[datetime.datetime, datetime.datetime]]:
+    """Iter tuples of (interval start, interval end).
+
+    :param start_date: The starting datetime.
+    :param end_date: The ending datetime.
+    :param granularity: The granularity for steps (e.g., "d" for days, "M" for months).
+    :return: An iterator of intervals (tuples of (start, end)).
+    """
+    interval_starts = list(iter_dates_between(start_date, end_date, granularity))
+    for i, interval_start in enumerate(interval_starts):
+        interval_end = interval_starts[i + 1] if i + 1 < len(interval_starts) else end_date
+        if interval_start == interval_end:
+            continue
+        yield interval_start, interval_end
