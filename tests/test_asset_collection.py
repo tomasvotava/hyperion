@@ -162,7 +162,7 @@ class TestAssetCollection:
         self, collection: type[MockCollection] | type[PolarsMockCollection]
     ) -> None:
         with pytest.raises(
-            RuntimeError, match="Owner collection '(MockCollection|PolarsMockCollection)' was not fetched yet."
+            RuntimeError, match=r"Owner collection '(MockCollection|PolarsMockCollection)' was not fetched yet."
         ):
             _ = collection().mocks
 
@@ -190,7 +190,7 @@ class TestAssetCollection:
 
     async def test_fetch_polars_invalid(self) -> None:
         with pytest.raises(
-            pandera.errors.SchemaError, match="expected column 'partition_date' to have type String, got Datetime"
+            pandera.errors.SchemaError, match=r"expected column 'partition_date' to have type String, got Datetime"
         ):
             await PolarsMockCollectionInvalid.fetch_all()
 

@@ -66,7 +66,7 @@ async def test_aiter_asynciterable() -> None:
 
 
 async def test_aiter_unsupported() -> None:
-    with pytest.raises(TypeError, match="Provided value cannot be iterated over."):
+    with pytest.raises(TypeError, match=r"Provided value cannot be iterated over."):
         await collect_test(None)
 
 

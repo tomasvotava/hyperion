@@ -175,7 +175,7 @@ class TestCache:
         if isinstance(instance, InMemoryCache):
             # InMemoryCache stores bytes as base64
             with pytest.raises(
-                CachingError, match="Failed to decode cached key .mixed., make sure it was stored as bytes"
+                CachingError, match=r"Failed to decode cached key .mixed., make sure it was stored as bytes"
             ):
                 raise ValueError(instance.get_bytes("mixed"))
         else:
