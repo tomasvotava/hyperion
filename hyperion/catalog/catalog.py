@@ -300,13 +300,13 @@ class Catalog:
                 file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
             )
         if notify:
-            self._notify_asset_arrival(asset)
+            self._notify_asset_arrival(asset, schema_path=schema_path)
 
-    def _notify_asset_arrival(self, asset: AssetProtocol) -> None:
+    def _notify_asset_arrival(self, asset: AssetProtocol, schema_path: str | None = None) -> None:
         if not isinstance(asset, DataLakeAsset):
             logger.debug("Skipping notification for asset, not DataLakeAsset type.", asset=asset)
             return
-        message = DataLakeArrivalMessage(asset=asset, event=ArrivalEvent.ARRIVED)
+        message = DataLakeArrivalMessage(asset=asset, event=ArrivalEvent.ARRIVED, schema_path=schema_path)
         logger.info("Sending data lake arrival message.", asset=asset, message=message, queue=self.queue)
         self.queue.send(message)
 
@@ -349,7 +349,7 @@ class Catalog:
         with self._prepare_asset_storage(asset, data, schema_path) as file:
             self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
         if notify:
-            self._notify_asset_arrival(asset)
+            self._notify_asset_arrival(asset, schema_path=schema_path)
 
     def get_store_config(self, asset: AssetProtocol | type[AssetProtocol]) -> StoreBucketConfig:
         try:
