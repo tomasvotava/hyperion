@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0 (2025-10-02)
+
+### Feat
+
+- add schema_path to DataLakeArrivalMessage and update notification method
+
+### Fix
+
+- make sure attributes exist when logging self
+
 ## 0.11.0 (2025-09-29)
 
 ### Feat
