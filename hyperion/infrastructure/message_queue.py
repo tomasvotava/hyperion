@@ -56,6 +56,7 @@ class Message(BaseModel):
 class DataLakeArrivalMessage(Message):
     asset: DataLakeAsset
     event: ArrivalEvent
+    schema_path: str | None = None
 
 
 class SourceBackfillMessage(Message):
