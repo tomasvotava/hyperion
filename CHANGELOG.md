@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0 (2025-11-05)
+
+### Feat
+
+- allow setting http proxy for https and vice-versa
+
 ## 0.12.0 (2025-10-02)
 
 ### Feat
