@@ -55,8 +55,14 @@ class AsyncHTTPClientWrapper:
             redacted_url = redact_url(http_config.proxy_http)
             logger.info("Configuring HTTP proxy for http://", proxy_url=redacted_url)
             proxy_mounts["http://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_http)
+            if not http_config.proxy_https:
+                logger.info("Configuring HTTP proxy for https://", proxy_url=redacted_url)
+                proxy_mounts["https://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_http)
         if http_config.proxy_https:
             redacted_url = redact_url(http_config.proxy_https)
             logger.info("Configuring HTTP proxy for https://", proxy_url=redacted_url)
             proxy_mounts["https://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_https)
+            if not http_config.proxy_http:
+                logger.info("Configuring HTTP proxy for http://", proxy_url=redacted_url)
+                proxy_mounts["http://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_https)
         return proxy_mounts
