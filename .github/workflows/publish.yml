@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       create_github_release:
-        description: 'Create GitHub prerelease'
+        description: "Create GitHub prerelease"
         required: true
         default: true
         type: boolean
@@ -28,11 +28,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - uses: ./.github/actions/install-all
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       - name: Get current version and create dev version
         id: version
