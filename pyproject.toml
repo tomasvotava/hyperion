@@ -31,7 +31,7 @@ click = "^8.2.1"
 [tool.poetry.group.dev.dependencies]
 ruff = ">=0.9.10,<0.15.0"
 mypy = "^1.15.0"
-pytest = "^8.3.5"
+pytest = ">=8.3.5,<10.0.0"
 pytest-cov = ">=6,<8"
 boto3-stubs = { extras = ["dynamodb", "s3"], version = "^1.37.24" }
 types-cachetools = ">=5.5.0.20240820,<7.0.0.0"
