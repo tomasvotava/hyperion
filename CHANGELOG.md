@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.0 (2025-11-26)
+
+### Feat
+
+- add support for python 3.14
+
 ## 0.13.0 (2025-11-05)
 
 ### Feat
