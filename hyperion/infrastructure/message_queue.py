@@ -218,17 +218,17 @@ class FileQueue(Queue):
             overwrite (bool, optional): Whether to overwrite the queue file if it exists. Defaults to False.
             exclusive (bool, optional): Whether to use exclusive access to the queue file. Defaults to False.
         """
-        super().__init__()
         self._messages: list[Message] = []
         self._context_stacklevel = 0
         self._exclusive = exclusive
+        self.queue_path = queue_path.resolve()
+        super().__init__()
         if queue_path.exists():
             if not queue_path.resolve().is_file():
                 raise FileExistsError(f"Queue path {queue_path} already exists and is not a file.")
             if not overwrite:
                 raise FileExistsError(f"Queue path {queue_path} already exists, set overwrite=True to ignore this.")
             logger.warning("Queue path already exists, it will be overwritten.", queue_path=queue_path, queue=self)
-        self.queue_path = queue_path.resolve()
 
     def send(self, message: Message) -> None:
         if self._context_stacklevel == 0:
