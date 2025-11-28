@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 (2025-11-28)
+
+### Fix
+
+- FileQueue calls __repr__ before assigning attributes
+
 ## 0.14.0 (2025-11-26)
 
 ### Feat
