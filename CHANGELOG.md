@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.0 (2026-03-11)
+
+### Feat
+
+- remove AsyncHTTPClientWrapper, promote `get_proxy_mounts` to public method
+
 ## 0.14.1 (2025-11-28)
 
 ### Fix
