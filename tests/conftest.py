@@ -32,7 +32,7 @@ def _moto_server() -> Iterator[None]:
     if not moto_server_path:
         raise RuntimeError("moto_server was not found in the PATH.")
     with (
-        subprocess.Popen(("moto_server", "-H", "localhost", "-p", str(port)), executable=moto_server_path) as pipe,  # noqa: S603
+        subprocess.Popen(("moto_server", "-H", "localhost", "-p", str(port)), executable=moto_server_path) as pipe,  # noqa: S603, S607
         apply_env(
             AWS_ACCESS_KEY_ID="testing",
             AWS_SECRET_ACCESS_KEY="testing",  # noqa: S106 # pragma: allowlist secret
