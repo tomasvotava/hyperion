@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1 (2026-05-12)
+
+### Fix
+
+- add type annotation for cache attribute
+
 ## 0.15.0 (2026-03-11)
 
 ### Feat
