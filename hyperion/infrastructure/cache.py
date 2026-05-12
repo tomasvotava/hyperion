@@ -277,6 +277,7 @@ class InMemoryCache(Cache):
     """An in-memory cache for our shenanigans."""
 
     MAX_KEYS = 1000
+    cache: cachetools.TTLCache[str, str]
 
     def __init__(
         self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, max_size: int = MAX_KEYS
