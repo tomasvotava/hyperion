@@ -3,7 +3,7 @@ from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from time import sleep
+from time import sleep, time
 
 import boto3
 import pytest
@@ -258,3 +258,51 @@ def test_cache_stats_subtraction() -> None:
     a = CacheStats(hits=69, misses=420, gets=42, deletes=1, clears=2, sets=7)
     b = CacheStats(hits=1, misses=1, gets=2, deletes=2, clears=0, sets=5)
     assert a - b == {"hits": 68, "misses": 419, "gets": 40, "deletes": -1, "sets": 2, "clears": 2}
+
+
+# ---- Group B4: eviction-order + stats-on-overwrite invariants ----
+
+
+@pytest.mark.parametrize("local_file_cache_maxsize", [3000], indirect=True)
+def test_local_file_cache_eviction_oldest_first(
+    local_file_cache_maxsize: LocalFileCache,
+) -> None:
+    # Three 1024-byte entries; max_size=3000 forces at least one eviction. The
+    # oldest (lowest mtime) entry must be evicted first. Use os.utime to fix
+    # mtimes explicitly so the test is independent of filesystem time resolution.
+    cache = local_file_cache_maxsize
+
+    def _write_and_locate(key: str, value: bytes) -> Path:
+        before = set(cache.root_path.iterdir())
+        cache.set_bytes(key, value)
+        return (set(cache.root_path.iterdir()) - before).pop()
+
+    oldest_path = _write_and_locate("oldest", os.urandom(1024))
+    middle_path = _write_and_locate("middle", os.urandom(1024))
+    newest_path = _write_and_locate("newest", os.urandom(1024))
+
+    now = time()
+    os.utime(oldest_path, (now - 200, now - 200))
+    os.utime(middle_path, (now - 100, now - 100))
+    os.utime(newest_path, (now, now))
+
+    cache.shrink_to_fit_max_size()
+    assert not cache.hit("oldest")
+    assert cache.hit("newest")
+
+
+@pytest.mark.parametrize(
+    "instance",
+    ["in_memory_cache", "local_file_cache_no_compression"],
+    indirect=True,
+)
+def test_stats_overwrite_counts_each_set(instance: Cache) -> None:
+    # Writing the same key twice records two separate `sets`, regardless of whether
+    # the underlying storage replaces or appends. This invariant matters because
+    # the refactor's stats tracking lives at the abstract Cache level.
+    before = instance.stats
+    instance.set("k", "v1")
+    instance.set("k", "v2")
+    after = instance.stats
+    assert (after - before).get("sets") == 2
+    assert instance.get("k") == "v2"
