@@ -14,6 +14,11 @@ from hyperion.catalog.schema import LocalSchemaStore
 from hyperion.dateutils import TimeResolution, assure_timezone, quantize_datetime, utcnow
 from hyperion.entities.catalog import AssetProtocol, AssetType, DataLakeAsset, FeatureAsset, PersistentStoreAsset
 from hyperion.infrastructure.cache import LocalFileCache
+from hyperion.infrastructure.message_queue import (
+    ArrivalEvent,
+    DataLakeArrivalMessage,
+    InMemoryQueue,
+)
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
@@ -289,3 +294,254 @@ class TestCatalog:
         def test_get_asset_size(self, catalog: Catalog, asset: DataLakeAsset, data_dir: Path) -> None:
             expected_size = _get_test_asset_size(asset.name, data_dir)
             assert catalog.get_asset_file_size(asset) == expected_size
+
+
+# -----------------------------------------------------------------------------
+# Contract-hardening tests (Group B1 of the DDD refactor prep plan).
+#
+# These pin behaviours that today only exist implicitly. After the refactor adds
+# `StoragePort`, the same tests will be parametrized over `S3Storage(moto)` and
+# `FilesystemStorage(tmp_path)` (refactor Step 5) — write them so that
+# parametrize axis can be added without rewrites.
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def queue_aware_catalog(test_tmp_dir: Path, s3client: "S3Client") -> Catalog:
+    # Reuse the catalog buckets from the module fixture but inject an in-memory
+    # queue so we can observe arrival notifications without touching SQS.
+    return Catalog(
+        data_lake_bucket=DATA_LAKE_BUCKET,
+        feature_store_bucket=FEATURE_STORE_BUCKET,
+        persistent_store_bucket=PERSISTENT_STORE_BUCKET,
+        schema_store=LocalSchemaStore(test_tmp_dir / "schemas"),
+        queue=InMemoryQueue(),
+    )
+
+
+def _read_avro_via_s3(bucket: str, key: str) -> tuple[list[Any], dict[str, Any]]:
+    """Round-trip helper: pull an avro blob out of S3 and decode it directly."""
+    import io
+
+    s3 = boto3.client("s3")
+    response = s3.get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read()
+
+    reader = fastavro.reader(io.BytesIO(body))
+    records: list[Any] = list(reader)
+    metadata: dict[str, Any] = dict(reader.metadata)
+    return records, metadata
+
+
+class TestAvroRoundtrip:
+    """Lock the avro encode/decode contract so refactor Step 5 (StoragePort + AvroSerializer
+    extraction) can be checked for byte-level parity.
+    """
+
+    def test_primitive_types_roundtrip(self, queue_aware_catalog: Catalog, test_tmp_dir: Path) -> None:
+        # Write a one-off schema that exercises strings, longs, doubles, booleans, nulls.
+        schema = {
+            "type": "record",
+            "name": "Primitives",
+            "fields": [
+                {"name": "id", "type": "string"},
+                {"name": "count", "type": "long"},
+                {"name": "weight", "type": "double"},
+                {"name": "flag", "type": "boolean"},
+                {"name": "maybe", "type": ["null", "string"]},
+            ],
+        }
+        schema_path = test_tmp_dir / "schemas" / "primitives.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        data = [
+            {"id": "a", "count": 1, "weight": 1.5, "flag": True, "maybe": "yes"},
+            {"id": "b", "count": -2, "weight": 0.0, "flag": False, "maybe": None},
+        ]
+        asset = DataLakeAsset("primitives", utcnow())
+        queue_aware_catalog.store_asset(asset, data, notify=False, schema_path=schema_path.as_posix())
+
+        retrieved = list(queue_aware_catalog.retrieve_asset(asset))
+        assert retrieved == data
+
+    def test_array_and_record_types_roundtrip(
+        self, queue_aware_catalog: Catalog, test_tmp_dir: Path
+    ) -> None:
+        schema = {
+            "type": "record",
+            "name": "Composite",
+            "fields": [
+                {"name": "tags", "type": {"type": "array", "items": "string"}},
+                {
+                    "name": "nested",
+                    "type": {
+                        "type": "record",
+                        "name": "Inner",
+                        "fields": [
+                            {"name": "x", "type": "int"},
+                            {"name": "y", "type": "int"},
+                        ],
+                    },
+                },
+            ],
+        }
+        schema_path = test_tmp_dir / "schemas" / "composite.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        data = [{"tags": ["a", "b"], "nested": {"x": 1, "y": 2}}]
+        asset = DataLakeAsset("composite", utcnow())
+        queue_aware_catalog.store_asset(asset, data, notify=False, schema_path=schema_path.as_posix())
+
+        retrieved = list(queue_aware_catalog.retrieve_asset(asset))
+        assert retrieved == data
+
+    def test_metadata_written_to_avro(
+        self, queue_aware_catalog: Catalog, test_tmp_dir: Path
+    ) -> None:
+        # The catalog writes the asset's to_metadata() into avro's metadata block.
+        schema = {
+            "type": "record",
+            "name": "MetadataCheck",
+            "fields": [{"name": "id", "type": "string"}],
+        }
+        schema_path = test_tmp_dir / "schemas" / "metadata-check.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        date = datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc)
+        asset = DataLakeAsset("metadata-check", date)
+        queue_aware_catalog.store_asset(
+            asset, [{"id": "x"}], notify=False, schema_path=schema_path.as_posix()
+        )
+
+        _, metadata = _read_avro_via_s3(DATA_LAKE_BUCKET, asset.get_path())
+        # fastavro returns metadata keys as bytes.
+        decoded = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v
+                   for k, v in metadata.items()}
+        assert decoded.get("name") == "metadata-check"
+        assert decoded.get("schema_version") == "1"
+        assert decoded.get("date") == date.isoformat()
+
+
+class TestQueueNotification:
+    def test_store_data_lake_asset_sends_arrival_message(
+        self, queue_aware_catalog: Catalog, test_tmp_dir: Path
+    ) -> None:
+        schema = {"type": "record", "name": "X", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "notify-check.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        asset = DataLakeAsset("notify-check", utcnow())
+        queue_aware_catalog.store_asset(
+            asset, [{"id": "x"}], notify=True, schema_path=schema_path.as_posix()
+        )
+
+        queue = queue_aware_catalog.queue
+        assert isinstance(queue, InMemoryQueue)
+        assert len(queue._messages) == 1
+        message = queue._messages[0]
+        assert isinstance(message, DataLakeArrivalMessage)
+        assert message.asset == asset
+        assert message.event == ArrivalEvent.ARRIVED
+        assert message.schema_path == schema_path.as_posix()
+
+    def test_notify_false_skips_message(
+        self, queue_aware_catalog: Catalog, test_tmp_dir: Path
+    ) -> None:
+        schema = {"type": "record", "name": "X", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "notify-false.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        asset = DataLakeAsset("notify-false", utcnow())
+        queue = queue_aware_catalog.queue
+        assert isinstance(queue, InMemoryQueue)
+        before = len(queue._messages)
+        queue_aware_catalog.store_asset(
+            asset, [{"id": "x"}], notify=False, schema_path=schema_path.as_posix()
+        )
+        assert len(queue._messages) == before
+
+    def test_non_datalake_asset_does_not_notify(
+        self, queue_aware_catalog: Catalog, test_tmp_dir: Path
+    ) -> None:
+        # FeatureAsset / PersistentStoreAsset should not trigger queue notifications even
+        # when notify=True (per `_notify_asset_arrival`).
+        schema = {"type": "record", "name": "X", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "feature-no-notify.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        feature_asset = FeatureAsset("feature-no-notify", utcnow(), "1d")
+        queue = queue_aware_catalog.queue
+        assert isinstance(queue, InMemoryQueue)
+        before = len(queue._messages)
+        queue_aware_catalog.store_asset(
+            feature_asset, [{"id": "x"}], notify=True, schema_path=schema_path.as_posix()
+        )
+        assert len(queue._messages) == before
+
+
+class TestPartitionIterationRegex:
+    """Pins the key-parsing contract of `iter_datalake_partitions`. Refactor F1
+    (StoragePort) hands over the key iteration to the adapter; the regex must continue
+    to skip non-conforming keys and parse valid ones.
+    """
+
+    def test_multiple_versions_for_same_date(self, default_catalog: Catalog, test_tmp_dir: Path) -> None:
+        schema = {"type": "record", "name": "X", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "multiver.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+        # Write the same asset name with two schema versions on the same date.
+        date = datetime.datetime(2025, 6, 1, tzinfo=datetime.timezone.utc)
+        default_catalog.store_asset(
+            DataLakeAsset("multiver", date, schema_version=1),
+            [{"id": "v1"}], notify=False, schema_path=schema_path.as_posix(),
+        )
+        default_catalog.store_asset(
+            DataLakeAsset("multiver", date, schema_version=2),
+            [{"id": "v2"}], notify=False, schema_path=schema_path.as_posix(),
+        )
+
+        partitions = list(default_catalog.iter_datalake_partitions("multiver"))
+        versions = sorted(p.schema_version for p in partitions)
+        assert versions == [1, 2]
+
+    def test_skips_keys_with_invalid_filename(
+        self, default_catalog: Catalog, s3client: "S3Client"
+    ) -> None:
+        # Drop a junk key under the asset prefix and verify iter_datalake_partitions
+        # silently skips it.
+        s3client.put_object(
+            Bucket=DATA_LAKE_BUCKET,
+            Key="junk-asset/date=2025-07-01T00:00:00+00:00/not-an-avro-file.txt",
+            Body=b"junk",
+        )
+        # No partitions should match since the filename doesn't fit the version regex.
+        partitions = list(default_catalog.iter_datalake_partitions("junk-asset"))
+        assert partitions == []
+
+    def test_skips_keys_with_wrong_structure(
+        self, default_catalog: Catalog, s3client: "S3Client"
+    ) -> None:
+        # A key with fewer than 3 path segments must be skipped (no exception).
+        s3client.put_object(
+            Bucket=DATA_LAKE_BUCKET,
+            Key="bad-shape-asset/v1.avro",
+            Body=b"junk",
+        )
+        partitions = list(default_catalog.iter_datalake_partitions("bad-shape-asset"))
+        assert partitions == []
+
+
+class TestFeatureStorePartitionQuantization:
+    @pytest.mark.usefixtures("_test_data")
+    def test_skips_missing_partitions(self, default_catalog: Catalog) -> None:
+        # Span a range that is wider than what's seeded; missing partitions must be
+        # silently skipped, not raised.
+        date_from = SUPERFEATURE_DATE_START - datetime.timedelta(days=14)
+        date_to = SUPERFEATURE_PARTITION_DATES[-1] + datetime.timedelta(days=14)
+        partitions = list(
+            default_catalog.iter_feature_store_partitions(
+                "superfeature", TimeResolution(1, "d"), date_from, date_to
+            )
+        )
+        # Only the seeded partitions are returned; the surrounding dates aren't.
+        assert {p.partition_date for p in partitions} == set(SUPERFEATURE_PARTITION_DATES)
