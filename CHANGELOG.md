@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.2 (2026-05-15)
+
+### Refactor
+
+- **ports**: extract abstract bases into hyperion/ports
+
 ## 0.15.1 (2026-05-12)
 
 ### Fix
