@@ -72,6 +72,37 @@ def test_lite_core_module_pulls_no_heavy_deps(module: str) -> None:
     assert hits == set(), f"{module} unexpectedly imports {sorted(hits)}"
 
 
+# -- Ports layer (S1): every port module must import in a fresh interpreter.
+#    Two of them (queue, schema_registry) reference Message / AssetProtocol /
+#    AssetType only in annotations, so they must NOT pull boto3 or the data
+#    stack -- this guards the deferred-import / TYPE_CHECKING wiring. The cache
+#    and keyval ports legitimately use snappy for (de)compression, so snappy is
+#    deliberately not asserted against. --
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "hyperion.ports",
+        "hyperion.ports.cache",
+        "hyperion.ports.queue",
+        "hyperion.ports.keyval",
+        "hyperion.ports.secrets",
+        "hyperion.ports.schema_registry",
+        "hyperion.ports.storage",
+    ],
+)
+def test_ports_modules_import(module: str) -> None:
+    # _loaded_modules fails the test if the import errors out.
+    assert module in _loaded_modules(module)
+
+
+@pytest.mark.parametrize("module", ["hyperion.ports.queue", "hyperion.ports.schema_registry"])
+def test_annotation_only_ports_stay_lite(module: str) -> None:
+    hits = _heavy_pulled_in(module)
+    forbidden = {"boto3", "botocore", "polars", "pandera", "fastavro", "numpy"} & hits
+    assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
+
+
 # -- These modules currently violate the promise; the refactor fixes them --
 # `strict=True` means the marker fails CI as soon as the test starts passing —
 # forcing the marker to be removed when the corresponding refactor step lands.

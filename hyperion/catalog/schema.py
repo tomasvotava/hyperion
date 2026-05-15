@@ -1,104 +1,52 @@
-"""Schema store."""
+"""Concrete schema store adapters.
 
-import abc
+.. deprecated::
+    The abstract :class:`SchemaStore` moved to
+    :mod:`hyperion.ports.schema_registry`. Import it from there. This module
+    keeps it importable (with a :class:`DeprecationWarning`) for the whole
+    ``hyperion-sdk`` 1.x line and still hosts the concrete adapters until S6.
+"""
+
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, ClassVar, cast
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, cast
 
-from hyperion.config import storage_config
-from hyperion.entities.catalog import AssetProtocol, AssetType
+from hyperion._compat import moved_attr
+from hyperion.entities.catalog import AssetType
 from hyperion.infrastructure.aws import S3Client
 from hyperion.log import get_logger
+from hyperion.ports.schema_registry import SchemaStore as _SchemaStore
+
+if TYPE_CHECKING:
+    from hyperion.ports.schema_registry import SchemaStore
 
 logger = get_logger("schema-store")
 
 AVRO_SCHEMAS_PATH = Path(__file__).parent / "avro_schemas"
 
+_MOVED: dict[str, tuple[object, str]] = {
+    "SchemaStore": (_SchemaStore, "hyperion.ports.schema_registry"),
+}
 
-class SchemaStore(abc.ABC):
-    """Abstract base class for schema stores."""
-
-    _instances: ClassVar[dict[str, "SchemaStore"]] = {}
-
-    def __init__(self, path: str) -> None:
-        """Initialize the schema store with the given path.
-
-        Args:
-            path (str): The path to the schema store.
-        """
-        self.path = path
-
-    def get_asset_schema(self, asset: AssetProtocol) -> dict[str, Any]:
-        """Get the schema for the given asset.
-
-        Args:
-            asset (AssetProtocol): The asset to get the schema for.
-
-        Returns:
-            dict[str, Any]: The schema for the asset.
-        """
-        return self.get_schema(asset.name, asset.schema_version, asset_type=asset.asset_type)
-
-    @abc.abstractmethod
-    def get_schema_from_path(self, schema_path: str) -> dict[str, Any]:
-        """Get the schema given by its path.
-
-        Args:
-            schema_path (str): The path to the schema.
-
-        Returns:
-            dict[str, Any]: The schema.
-        """
-
-    @abc.abstractmethod
-    def get_schema(self, asset_name: str, schema_version: int, asset_type: AssetType) -> dict[str, Any]:
-        """Get the schema for the asset with the given name and version."""
-
-    @staticmethod
-    def _create_new(path: str) -> "SchemaStore":
-        parsed = urlparse(path)
-        if parsed.scheme == "file" or not parsed.scheme:
-            resolved = (Path(parsed.netloc or "/") / parsed.path.lstrip("/")).resolve()
-            logger.info("Using file schema store.", path=resolved.as_posix())
-            return LocalSchemaStore(resolved)
-        if parsed.scheme == "s3":
-            bucket = parsed.netloc
-            prefix = parsed.path.lstrip("/")
-            logger.info("Using S3 schema store.", bucket=bucket, prefix=prefix)
-            return S3SchemaStore(bucket, prefix)
-        logger.critical("Unsupported schema store scheme.", scheme=parsed.scheme, path=storage_config.schema_path)
-        raise ValueError(f"Unsupported schema store scheme {parsed.scheme!r}.")
-
-    @staticmethod
-    def from_path(path: str) -> "SchemaStore":
-        """Get a schema store from the given path.
-
-        Args:
-            path (str): The path to the schema store.
-
-        Returns:
-            SchemaStore: The schema store.
-        """
-        if path not in SchemaStore._instances:
-            SchemaStore._instances[path] = SchemaStore._create_new(path)
-        return SchemaStore._instances[path]
-
-    @staticmethod
-    def from_config() -> "SchemaStore":
-        """Get a schema store from the configuration.
-
-        Returns:
-            SchemaStore: The schema store.
-        """
-        return SchemaStore.from_path(storage_config.schema_path)
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__name__} path={self.path!r}>"
+__all__ = [
+    "AVRO_SCHEMAS_PATH",
+    "LocalSchemaStore",
+    "S3SchemaStore",
+    "SchemaStore",
+]
 
 
-class LocalSchemaStore(SchemaStore):
+def __getattr__(name: str) -> object:
+    if name in _MOVED:
+        value, new_module = _MOVED[name]
+        return moved_attr(
+            name=name, value=value, old_module="hyperion.catalog.schema", new_module=new_module
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class LocalSchemaStore(_SchemaStore):
     """Schema store for local files."""
 
     def __init__(self, schemas_path: Path = AVRO_SCHEMAS_PATH) -> None:
@@ -138,7 +86,7 @@ def _get_schema_from_s3(bucket: str, key: str, client: S3Client) -> dict[str, An
     return cast(dict[str, Any], json.loads(client.download_as_string(bucket, key)))
 
 
-class S3SchemaStore(SchemaStore):
+class S3SchemaStore(_SchemaStore):
     """Schema store for S3."""
 
     def __init__(self, bucket: str, prefix: str) -> None:

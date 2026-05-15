@@ -16,12 +16,12 @@ from hyperion.config import source_config, storage_config
 from hyperion.entities.catalog import DataLakeAsset
 from hyperion.infrastructure.message_queue import (
     FileQueue,
-    Queue,
     SourceBackfillMessage,
     SQSQueue,
     iter_messages_from_sqs_event,
 )
 from hyperion.log import get_logger
+from hyperion.ports.queue import Queue
 
 SourceEventType = EventBridgeEvent | SQSEvent
 

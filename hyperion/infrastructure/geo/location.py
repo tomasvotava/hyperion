@@ -11,8 +11,8 @@ import numpy as np
 import numpy.typing as npt
 from haversine.haversine import get_avg_earth_radius
 
-from hyperion.infrastructure.cache import Cache
 from hyperion.log import get_logger
+from hyperion.ports.cache import Cache
 
 LATITUDE_DEGREE_TO_METERS = 111_000
 EARTH_RADIUS_METERS = get_avg_earth_radius(haversine.Unit.METERS)
