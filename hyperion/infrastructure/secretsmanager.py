@@ -1,61 +1,55 @@
-import abc
-import os
-import re
-from typing import cast
+"""Concrete secrets manager adapters.
+
+.. deprecated::
+    The abstract :class:`SecretsManager` and :data:`SECRET_PATTERN` moved to
+    :mod:`hyperion.ports.secrets`. Import them from there. This module keeps
+    them importable (with a :class:`DeprecationWarning`) for the whole
+    ``hyperion-sdk`` 1.x line and still hosts the concrete adapters until S6.
+"""
+
+from typing import TYPE_CHECKING, cast
 
 import boto3
 
-from hyperion.config import secrets_config
+from hyperion._compat import moved_attr
 from hyperion.log import get_logger
+from hyperion.ports.secrets import SECRET_PATTERN as _SECRET_PATTERN
+from hyperion.ports.secrets import SecretsManager as _SecretsManager
+
+if TYPE_CHECKING:
+    from hyperion.ports.secrets import SECRET_PATTERN, SecretsManager
 
 logger = get_logger("hyperion-secrets")
 
-SECRET_PATTERN = re.compile(r"!#secret:#(?P<secret_name>.+)")
+_MOVED: dict[str, tuple[object, str]] = {
+    "SecretsManager": (_SecretsManager, "hyperion.ports.secrets"),
+    "SECRET_PATTERN": (_SECRET_PATTERN, "hyperion.ports.secrets"),
+}
+
+__all__ = [
+    "SECRET_PATTERN",
+    "AWSSecretsManager",
+    "DummySecretsManager",
+    "SecretsManager",
+]
 
 
-class SecretsManager(abc.ABC):
-    _instance: "SecretsManager | None" = None
-
-    @staticmethod
-    def _create_new() -> "SecretsManager":
-        if secrets_config.backend is None:
-            logger.warning("No secrets backend is configured. Using dummy secrets manager.")
-            return DummySecretsManager()
-        if secrets_config.backend == "AWSSecretsManager":
-            logger.info("Using AWS Secrets Manager.")
-            return AWSSecretsManager()
-        raise ValueError(f"Unsupported secrets backend: {secrets_config.backend!r}.")
-
-    @staticmethod
-    def from_config() -> "SecretsManager":
-        if SecretsManager._instance is None:
-            SecretsManager._instance = SecretsManager._create_new()
-        return SecretsManager._instance
-
-    @staticmethod
-    def translate_env_vars() -> None:
-        """Loop through all env variables and replace secrets with their values.
-
-        Only variables with value pattern of `!#secret:#secret_name` will be replaced.
-        """
-        for key, value in os.environ.items():
-            if (match := SECRET_PATTERN.match(value)) is not None:
-                secret_name = match.group("secret_name")
-                logger.info("Replacing secret in environment variable.", key=key, secret_name=secret_name)
-                os.environ[key] = SecretsManager.from_config().get_secret(secret_name)
-
-    @abc.abstractmethod
-    def get_secret(self, secret_name: str) -> str:
-        """Get the secret with the given name."""
+def __getattr__(name: str) -> object:
+    if name in _MOVED:
+        value, new_module = _MOVED[name]
+        return moved_attr(
+            name=name, value=value, old_module="hyperion.infrastructure.secretsmanager", new_module=new_module
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-class DummySecretsManager(SecretsManager):
+class DummySecretsManager(_SecretsManager):
     def get_secret(self, secret_name: str) -> str:
         logger.warning("Using dummy secrets manager, no values will be returned.", secret_name=secret_name)
         return ""
 
 
-class AWSSecretsManager(SecretsManager):
+class AWSSecretsManager(_SecretsManager):
     def __init__(self) -> None:
         self.client = boto3.client("secretsmanager")
 

@@ -1,7 +1,14 @@
-import abc
+"""Message models and concrete queue adapters.
+
+.. deprecated::
+    The abstract :class:`Queue` moved to :mod:`hyperion.ports.queue`. Import it
+    from there. This module keeps it importable (with a
+    :class:`DeprecationWarning`) for the whole ``hyperion-sdk`` 1.x line and
+    still hosts the message models and concrete adapters until S6.
+"""
+
 import datetime
 import json
-import os
 import shutil
 import sys
 import tempfile
@@ -17,10 +24,12 @@ from boto3 import client
 # The convenience outweighs the performance hit.
 from pydantic import BaseModel, Field
 
-from hyperion.config import config, queue_config
+from hyperion._compat import moved_attr
+from hyperion.config import config
 from hyperion.dateutils import utcnow
 from hyperion.entities.catalog import DataLakeAsset
 from hyperion.log import get_logger
+from hyperion.ports.queue import Queue as _Queue
 
 if sys.version_info >= (3, 11) and TYPE_CHECKING:
     from typing import Self
@@ -28,7 +37,37 @@ if sys.version_info >= (3, 11) and TYPE_CHECKING:
 if sys.version_info < (3, 11) and TYPE_CHECKING:
     from typing_extensions import Self
 
+if TYPE_CHECKING:
+    from hyperion.ports.queue import Queue
+
 logger = get_logger("hyperion-queue")
+
+_MOVED: dict[str, tuple[object, str]] = {
+    "Queue": (_Queue, "hyperion.ports.queue"),
+}
+
+__all__ = [
+    "ArrivalEvent",
+    "DataLakeArrivalMessage",
+    "FileQueue",
+    "InMemoryQueue",
+    "Message",
+    "Queue",
+    "SQSQueue",
+    "SerializedMessage",
+    "SourceBackfillMessage",
+    "create_backfill_event",
+    "iter_messages_from_sqs_event",
+]
+
+
+def __getattr__(name: str) -> object:
+    if name in _MOVED:
+        value, new_module = _MOVED[name]
+        return moved_attr(
+            name=name, value=value, old_module="hyperion.infrastructure.message_queue", new_module=new_module
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class ArrivalEvent(str, Enum):
@@ -107,66 +146,7 @@ def create_backfill_event(
     }
 
 
-class Queue(abc.ABC):
-    _cached_instance: "ClassVar[Queue | None]" = None
-
-    @staticmethod
-    def _resolve_type_from_config() -> "type[Queue]":
-        if queue_config.url and queue_config.path:
-            logger.warning(
-                "Ambiguous configuration detected - both queue URL and queue path were set. Will default to SQS queue.",
-                queue_url=queue_config.url,
-                queue_path=queue_config.path,
-            )
-        if queue_config.url is not None:
-            return SQSQueue
-        if queue_config.path is not None:
-            return FileQueue
-        return InMemoryQueue
-
-    @classmethod
-    def _create_from_config(cls) -> "Queue":
-        queue_type = cls._resolve_type_from_config()
-        logger.info(
-            "Resolved queue type from configuration.",
-            queue_type=queue_type,
-            env={k: v for k, v in os.environ.items() if k.lower().startswith("hyperion")},
-        )
-        if queue_type is SQSQueue and queue_config.url is not None:
-            logger.info("Using SQS queue.")
-            return SQSQueue(queue_config.url)
-        if queue_type is FileQueue and queue_config.path is not None:
-            logger.info("Using FileQueue.")
-            return FileQueue(Path(queue_config.path), overwrite=queue_config.path_overwrite)
-        if queue_type is InMemoryQueue:
-            logger.info("Using in-memory queue.")
-            return InMemoryQueue()
-        raise ValueError(f"Unknown queue type {queue_type!r} or missing configuration options.")
-
-    @classmethod
-    def from_config(cls) -> "Queue":
-        if cls._cached_instance is None:
-            cls._cached_instance = cls._create_from_config()
-        if cls._cached_instance.__class__ is not (resolved_type := cls._resolve_type_from_config()):
-            raise RuntimeError(
-                f"Configuration inconsistency - cached queue instance is of type {type(cls._cached_instance)!r}, "
-                f"but type requested by configuration is {resolved_type!r}."
-            )
-        return cls._cached_instance
-
-    @abc.abstractmethod
-    def send(self, message: Message) -> None:
-        """Send a message to the queue."""
-
-    @abc.abstractmethod
-    def delete(self, receipt_handle: str) -> None:
-        """Delete a message from the queue."""
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__name__}>"
-
-
-class InMemoryQueue(Queue):
+class InMemoryQueue(_Queue):
     def __init__(self) -> None:
         super().__init__()
         self._messages: list[Message] = []
@@ -182,7 +162,7 @@ class InMemoryQueue(Queue):
                 break
 
 
-class SQSQueue(Queue):
+class SQSQueue(_Queue):
     def __init__(self, queue_url: str) -> None:
         super().__init__()
         self._queue_url = queue_url
@@ -207,7 +187,7 @@ class SQSQueue(Queue):
         return f"<{self.__class__.__name__} {self._queue_url}>"
 
 
-class FileQueue(Queue):
+class FileQueue(_Queue):
     def __init__(self, queue_path: Path, *, overwrite: bool = False, exclusive: bool = False) -> None:
         """File-based message queue.
 

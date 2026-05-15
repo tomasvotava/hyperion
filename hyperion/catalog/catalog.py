@@ -16,7 +16,6 @@ import fastavro.validation
 import fastavro.write
 
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
-from hyperion.catalog.schema import SchemaStore
 from hyperion.config import storage_config
 from hyperion.dateutils import (
     TimeResolution,
@@ -35,11 +34,13 @@ from hyperion.entities.catalog import (
     get_prefixed_path,
 )
 from hyperion.infrastructure.aws import S3Client
-from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage, Queue
+from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage
 from hyperion.log import get_logger
+from hyperion.ports.queue import Queue
+from hyperion.ports.schema_registry import SchemaStore
 
 if TYPE_CHECKING:
-    from hyperion.infrastructure.cache import Cache
+    from hyperion.ports.cache import Cache
 
 __all__ = ["AssetNotFoundError", "Catalog", "CatalogError"]
 
