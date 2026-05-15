@@ -18,7 +18,7 @@ from hyperion.config import storage_config
 from hyperion.log import get_logger
 
 if TYPE_CHECKING:
-    from hyperion.entities.catalog import AssetProtocol, AssetType
+    from hyperion.domain.assets import AssetProtocol, AssetType
 
 logger = get_logger("schema-store")
 

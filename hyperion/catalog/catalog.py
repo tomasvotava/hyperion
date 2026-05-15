@@ -26,7 +26,7 @@ from hyperion.dateutils import (
     truncate_datetime,
     utcnow,
 )
-from hyperion.entities.catalog import (
+from hyperion.domain.assets import (
     AssetProtocol,
     DataLakeAsset,
     FeatureAsset,

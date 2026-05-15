@@ -103,25 +103,25 @@ def test_annotation_only_ports_stay_lite(module: str) -> None:
     assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
 
 
-# -- These modules currently violate the promise; the refactor fixes them --
-# `strict=True` means the marker fails CI as soon as the test starts passing —
-# forcing the marker to be removed when the corresponding refactor step lands.
+# -- S2 (F5/F6) landed: typeutils.py split stdlib vs the pandera/polars half,
+#    and the entities.catalog / domain.assets identity layer no longer pulls
+#    the data stack. These must stay lite today and forever. --
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Refactor F5 / Step 2: typeutils.py must split stdlib vs pandera/polars half.",
-)
 def test_typeutils_does_not_pull_data_stack() -> None:
     assert _heavy_pulled_in("hyperion.typeutils") == set()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Refactor F6 / Step 2: entities.catalog Asset identity must drop pandera/polars.",
-)
 def test_entities_catalog_does_not_pull_data_stack() -> None:
     assert _heavy_pulled_in("hyperion.entities.catalog") == set()
 
+
+def test_domain_assets_does_not_pull_data_stack() -> None:
+    assert _heavy_pulled_in("hyperion.domain.assets") == set()
+
+
+# -- This module currently violates the promise; the refactor fixes it --
+# `strict=True` means the marker fails CI as soon as the test starts passing —
+# forcing the marker to be removed when the corresponding refactor step lands.
 
 @pytest.mark.xfail(
     strict=True,

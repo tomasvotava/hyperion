@@ -21,7 +21,7 @@ import cachetools
 from hyperion._compat import moved_attr
 from hyperion.catalog import AssetNotFoundError, Catalog
 from hyperion.dateutils import utcnow
-from hyperion.entities.catalog import PersistentStoreAsset
+from hyperion.domain.assets import PersistentStoreAsset
 from hyperion.log import get_logger
 from hyperion.ports.cache import DEFAULT_TTL_SECONDS, CacheKeyOpenMode
 from hyperion.ports.cache import Cache as _Cache
