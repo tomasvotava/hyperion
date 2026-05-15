@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from hyperion._compat import moved_attr
 from hyperion.config import config
 from hyperion.dateutils import utcnow
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.domain.assets import DataLakeAsset
 from hyperion.log import get_logger
 from hyperion.ports.queue import Queue as _Queue
 

@@ -13,7 +13,7 @@ from aws_lambda_typing.events import EventBridgeEvent, SQSEvent
 from hyperion.asyncutils import AsyncTaskQueue, get_loop
 from hyperion.catalog import Catalog
 from hyperion.config import source_config, storage_config
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.domain.assets import DataLakeAsset
 from hyperion.infrastructure.message_queue import (
     FileQueue,
     SourceBackfillMessage,

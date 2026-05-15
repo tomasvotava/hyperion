@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from hyperion._compat import moved_attr
-from hyperion.entities.catalog import AssetType
+from hyperion.domain.assets import AssetType
 from hyperion.infrastructure.aws import S3Client
 from hyperion.log import get_logger
 from hyperion.ports.schema_registry import SchemaStore as _SchemaStore

@@ -13,8 +13,9 @@ import polars
 
 from hyperion.asyncutils import iter_async
 from hyperion.catalog import Catalog
+from hyperion.data.asset_schemas import FeatureModel, PolarsFeatureModel
 from hyperion.dateutils import TimeResolution, utcnow
-from hyperion.entities.catalog import FeatureAsset, FeatureModel, PolarsFeatureModel
+from hyperion.domain.assets import FeatureAsset
 from hyperion.log import get_logger
 from hyperion.typeutils import DateOrDelta
 
