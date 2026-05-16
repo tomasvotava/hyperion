@@ -9,8 +9,8 @@ import googlemaps
 
 from hyperion.config import geo_config
 from hyperion.domain.assets import PersistentStoreAsset
+from hyperion.domain.geo import Location, NamedLocation
 from hyperion.infrastructure.cache import PersistentCache
-from hyperion.infrastructure.geo.location import Location, NamedLocation
 from hyperion.log import get_logger
 
 logger = get_logger("gmaps")

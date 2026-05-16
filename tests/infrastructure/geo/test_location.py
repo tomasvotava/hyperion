@@ -1,17 +1,17 @@
-"""Tests for `hyperion.infrastructure.geo.location`.
+"""Tests for the deprecated `hyperion.infrastructure.geo.location` path.
 
-The DDD refactor (F2) will move `Location` to `hyperion/domain/geo.py` and
-remove the `Location._cache` class variable. These tests pin the distance math
-and dataclass shapes so the cache-less version can be proven equivalent.
+The DDD refactor (F2 / Step 3) moved `Location`, `NamedLocation`,
+`SpatialKMeans` and the distance helpers to `hyperion/domain/geo.py` and removed
+the `Location._cache` class variable. These tests deliberately keep importing
+from the old `hyperion.infrastructure.geo.location` path so the deprecation
+shim stays exercised, and pin the (now cache-less) distance math.
 """
 
 import datetime
-from collections.abc import Iterator
 
 import numpy as np
 import pytest
 
-from hyperion.infrastructure.cache import Cache, InMemoryCache
 from hyperion.infrastructure.geo.location import (
     EARTH_RADIUS_METERS,
     Location,
@@ -21,33 +21,6 @@ from hyperion.infrastructure.geo.location import (
 )
 
 
-@pytest.fixture
-def isolated_location_cache() -> Iterator[InMemoryCache]:
-    # Location._cache is a *class variable*. Save/restore it so tests don't
-    # contaminate each other, and so the test doesn't depend on env-driven
-    # Cache.from_config() (which reaches for DynamoDB by default).
-    previous: Cache | None = Location._cache
-    cache = InMemoryCache(prefix="test-location", default_ttl=3600)
-    Location._cache = cache
-    try:
-        yield cache
-    finally:
-        Location._cache = previous
-
-
-@pytest.fixture
-def _no_location_cache() -> Iterator[None]:
-    # Force cls._cache to a noop cache that returns None for everything,
-    # to exercise the "no cache hit" path without resolving Cache.from_config().
-    previous: Cache | None = Location._cache
-    Location._cache = InMemoryCache(prefix="empty", default_ttl=3600)
-    try:
-        yield
-    finally:
-        Location._cache = previous
-
-
-@pytest.mark.usefixtures("_no_location_cache")
 class TestHaversineDistance:
     def test_same_point_is_zero(self) -> None:
         location = Location(50.0, 14.0)
@@ -79,7 +52,6 @@ class TestHaversineDistance:
         assert a.get_distance(b) == pytest.approx(b.get_distance(a), rel=1e-9)
 
 
-@pytest.mark.usefixtures("_no_location_cache")
 class TestEuclideanDistance:
     def test_same_point_is_zero(self) -> None:
         location = Location(50.0, 14.0)
@@ -94,42 +66,21 @@ class TestEuclideanDistance:
         assert euclidean == pytest.approx(haversine_distance, rel=1e-2)
 
 
-class TestDistanceCacheParity:
-    def test_uncached_call_returns_math_result(self, isolated_location_cache: InMemoryCache) -> None:
-        # Cache empty → must return the haversine math directly.
+class TestDistanceMath:
+    def test_call_returns_haversine_math_result(self) -> None:
         a = Location(0.0, 0.0)
         b = Location(0.0, 1.0)
         result = a.get_distance(b)
         assert result == pytest.approx(111_195, rel=1e-3)
 
-    def test_cached_value_is_used(self, isolated_location_cache: InMemoryCache) -> None:
-        # Pre-populate the cache; the cached value is returned even though
-        # it's wildly wrong, proving the cache lookup runs.
-        a = Location(0.0, 0.0)
-        b = Location(0.0, 1.0)
-        cache_key = str((a.latitude, a.longitude, b.latitude, b.longitude, False))
-        isolated_location_cache.set(cache_key, "9999999")
-        assert a.get_distance(b) == 9999999.0
-
-    def test_uncached_path_is_unaffected_by_cache_removal(
-        self, isolated_location_cache: InMemoryCache
-    ) -> None:
-        # The current implementation does not write into the cache on a miss,
-        # so removing the cache layer (F2) must not change uncached-call output.
+    def test_get_distance_equals_haversine_helper(self) -> None:
+        # F2 removed the (write-never) cache layer; get_distance must return
+        # exactly the haversine math for the non-approximate path.
         a = Location(48.8566, 2.3522)
         b = Location(52.52, 13.405)
-        with_cache = a.get_distance(b)
-        # Re-call after clearing the cache reference path entirely.
-        Location._cache = None
-        try:
-            isolated_location_cache.clear()
-            second = a._get_distance_haversine(b)
-        finally:
-            Location._cache = isolated_location_cache
-        assert with_cache == pytest.approx(second, rel=1e-12)
+        assert a.get_distance(b) == pytest.approx(a._get_distance_haversine(b), rel=1e-12)
 
 
-@pytest.mark.usefixtures("_no_location_cache")
 class TestGetNearest:
     def test_picks_closest(self) -> None:
         origin = Location(0.0, 0.0)
@@ -143,7 +94,6 @@ class TestGetNearest:
             origin.get_nearest([])
 
 
-@pytest.mark.usefixtures("_no_location_cache")
 class TestNamedLocation:
     def test_frozen_and_equal(self) -> None:
         loc = Location(0.0, 0.0)
@@ -177,7 +127,6 @@ class TestMetersToDegrees:
         assert lon_deg == pytest.approx(2.0, rel=1e-9)
 
 
-@pytest.mark.usefixtures("_no_location_cache")
 class TestSpatialKMeans:
     def test_deterministic_with_seeded_rng(self) -> None:
         # Two tight clusters; with a seeded numpy RNG, the result is stable.
