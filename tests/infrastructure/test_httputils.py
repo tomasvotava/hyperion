@@ -28,14 +28,14 @@ def test_redact_url(url: str, replace: str, expected: str) -> None:
 
 class TestGetProxyMounts:
     def test_no_proxy(self) -> None:
-        with patch("hyperion.infrastructure.httputils.http_config") as mock_config:
+        with patch("hyperion.adapters.http.proxy.http_config") as mock_config:
             mock_config.proxy_http = None
             mock_config.proxy_https = None
             mounts = get_proxy_mounts()
         assert mounts == {}
 
     def test_http_proxy_only(self) -> None:
-        with patch("hyperion.infrastructure.httputils.http_config") as mock_config:
+        with patch("hyperion.adapters.http.proxy.http_config") as mock_config:
             mock_config.proxy_http = "http://proxy:8080"
             mock_config.proxy_https = None
             mounts = get_proxy_mounts()
@@ -43,7 +43,7 @@ class TestGetProxyMounts:
         assert "https://" in mounts
 
     def test_https_proxy_only(self) -> None:
-        with patch("hyperion.infrastructure.httputils.http_config") as mock_config:
+        with patch("hyperion.adapters.http.proxy.http_config") as mock_config:
             mock_config.proxy_http = None
             mock_config.proxy_https = "http://proxy:8443"
             mounts = get_proxy_mounts()
@@ -51,7 +51,7 @@ class TestGetProxyMounts:
         assert "https://" in mounts
 
     def test_both_proxies(self) -> None:
-        with patch("hyperion.infrastructure.httputils.http_config") as mock_config:
+        with patch("hyperion.adapters.http.proxy.http_config") as mock_config:
             mock_config.proxy_http = "http://proxy:8080"
             mock_config.proxy_https = "http://proxy:8443"
             mounts = get_proxy_mounts()

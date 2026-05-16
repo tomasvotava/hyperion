@@ -1,9 +1,9 @@
 """Port: message queue abstraction.
 
-Abstract :class:`Queue` base. Message models and concrete adapters
-(``InMemoryQueue``, ``SQSQueue``, ``FileQueue``) live in
-``hyperion.infrastructure.message_queue`` until step S6; the ``from_config``
-family reaches the concrete adapters via a deferred import.
+Abstract :class:`Queue` base. Message models live in
+:mod:`hyperion.domain.messages`; concrete adapters (``InMemoryQueue``,
+``SQSQueue``, ``FileQueue``) live in ``hyperion.adapters.queue.*``. The
+``from_config`` family reaches the concrete adapters via a deferred import.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from hyperion.config import queue_config
 from hyperion.log import get_logger
 
 if TYPE_CHECKING:
-    from hyperion.infrastructure.message_queue import Message
+    from hyperion.domain.messages import Message
 
 logger = get_logger("hyperion-queue")
 
@@ -27,7 +27,9 @@ class Queue(abc.ABC):
 
     @staticmethod
     def _resolve_type_from_config() -> type[Queue]:
-        from hyperion.infrastructure.message_queue import FileQueue, InMemoryQueue, SQSQueue
+        from hyperion.adapters.queue.filesystem import FileQueue
+        from hyperion.adapters.queue.memory import InMemoryQueue
+        from hyperion.adapters.queue.sqs import SQSQueue
 
         if queue_config.url and queue_config.path:
             logger.warning(
@@ -43,7 +45,9 @@ class Queue(abc.ABC):
 
     @classmethod
     def _create_from_config(cls) -> Queue:
-        from hyperion.infrastructure.message_queue import FileQueue, InMemoryQueue, SQSQueue
+        from hyperion.adapters.queue.filesystem import FileQueue
+        from hyperion.adapters.queue.memory import InMemoryQueue
+        from hyperion.adapters.queue.sqs import SQSQueue
 
         queue_type = cls._resolve_type_from_config()
         logger.info(

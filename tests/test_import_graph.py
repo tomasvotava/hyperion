@@ -171,3 +171,69 @@ def test_lite_storage_adapters_pull_no_heavy_deps(module: str) -> None:
 )
 def test_catalog_namespace_lazy() -> None:
     assert _heavy_pulled_in("hyperion.catalog") == set()
+
+
+# -- S6 (F7) landed: concrete adapters relocated to hyperion.adapters.<port>.*
+#    and the message models to hyperion.domain.messages. The lite adapters and
+#    the domain message module must not drag boto3 / the data stack. (The
+#    ``dynamodb`` / ``sqs`` / ``aws_sm`` / ``s3`` adapters legitimately import
+#    boto3 and are deliberately excluded here.) --
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "hyperion.domain.messages",
+        "hyperion.adapters.cache",
+        "hyperion.adapters.cache.memory",
+        "hyperion.adapters.cache.filesystem",
+        "hyperion.adapters.keyval.memory",
+        "hyperion.adapters.keyval.filesystem",
+        "hyperion.adapters.queue.memory",
+        "hyperion.adapters.queue.filesystem",
+        "hyperion.adapters.secrets.dummy",
+        "hyperion.adapters.secrets.env",
+        "hyperion.adapters.schema_registry.local",
+        "hyperion.adapters.http.proxy",
+    ],
+)
+def test_s6_lite_adapters_pull_no_heavy_deps(module: str) -> None:
+    # ``snappy`` is deliberately not asserted against: the cache / keyval ports
+    # ``import snappy`` for (de)compression, so any adapter importing those ports
+    # transitively loads it. snappy is ``[snappy]``-gated at the install level
+    # (Step 10), not by this in-env guard -- same carve-out as numpy / haversine.
+    forbidden = (HEAVY_MODULES - {"snappy"}) & _heavy_pulled_in(module)
+    assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
+
+
+# -- S6 deferred-shim guarantee: importing a deprecated old path must not pull
+#    boto3 (the moved concretes are resolved lazily via __getattr__). The pure
+#    infra shims must also not drag the data stack. --
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "hyperion.infrastructure.keyval",
+        "hyperion.infrastructure.secretsmanager",
+        "hyperion.infrastructure.message_queue",
+        "hyperion.infrastructure.httputils",
+    ],
+)
+def test_pure_shims_pull_no_heavy_deps(module: str) -> None:
+    # snappy rides along via the cache / keyval ports (see note above); the
+    # contract that matters for the deferred shims is "no boto3 / data stack".
+    forbidden = (HEAVY_MODULES - {"snappy"}) & _heavy_pulled_in(module)
+    assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
+
+
+# ``hyperion.infrastructure.cache`` still hosts PersistentCache -> Catalog and
+# ``hyperion.catalog.schema`` touches the eager ``hyperion.catalog`` namespace
+# (-> fastavro), both status quo until S7 / S9 (F8: test_catalog_namespace_lazy
+# is xfail). The S6 contract for these is narrower: the deferred __getattr__
+# must never pull boto3 for the relocated concretes.
+
+
+@pytest.mark.parametrize("module", ["hyperion.infrastructure.cache", "hyperion.catalog.schema"])
+def test_deferred_shims_do_not_pull_boto3(module: str) -> None:
+    assert "boto3" not in _heavy_pulled_in(module)

@@ -1,22 +1,24 @@
-"""Concrete cache adapters.
+"""Deprecated import shim for cache adapters (still hosts ``PersistentCache``).
 
 .. deprecated::
     The abstract :class:`Cache`, :class:`CacheStats` and :class:`CachingError`
-    moved to :mod:`hyperion.ports.cache`. Import them from there. This module
-    keeps them importable (with a :class:`DeprecationWarning`) for the whole
-    ``hyperion-sdk`` 1.x line and still hosts the concrete adapters until S6.
+    moved to :mod:`hyperion.ports.cache`. The concrete adapters moved to
+    ``hyperion.adapters.cache.*`` (``InMemoryCache`` ->
+    :mod:`hyperion.adapters.cache.memory`, ``LocalFileCache`` ->
+    :mod:`hyperion.adapters.cache.filesystem`, ``DynamoDBCache`` ->
+    :mod:`hyperion.adapters.cache.dynamodb`). Import them from there. This
+    module keeps every relocated symbol importable (with a
+    :class:`DeprecationWarning`, resolved lazily so the import does not pull
+    boto3) for the whole ``hyperion-sdk`` 1.x line; symbols are removed in 2.0.
+
+    :class:`PersistentCache` is *not* relocated here -- it is the
+    ``Catalog`` <-> cache knot removed in step S7 and still lives in this
+    module until then.
 """
 
-import tempfile
-import time
+import importlib
 from base64 import b64decode, b64encode
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, Literal, cast, overload
-
-import boto3
-import cachetools
+from typing import TYPE_CHECKING, Any
 
 from hyperion._compat import moved_attr
 from hyperion.catalog import AssetNotFoundError, Catalog
@@ -29,17 +31,30 @@ from hyperion.ports.cache import CacheStats as _CacheStats
 from hyperion.ports.cache import CachingError as _CachingError
 
 if TYPE_CHECKING:
+    from hyperion.adapters.cache.dynamodb import DYNAMODB_MAX_LENGTH, DynamoDBCache
+    from hyperion.adapters.cache.filesystem import DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE, LocalFileCache
+    from hyperion.adapters.cache.memory import InMemoryCache
     from hyperion.ports.cache import Cache, CacheStats, CachingError
-
-DYNAMODB_MAX_LENGTH = 65535
-DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
 
 logger = get_logger("cache")
 
+_OLD_MODULE = "hyperion.infrastructure.cache"
+
+# Abstract contract types -- already imported from the lite ``ports`` layer.
 _MOVED: dict[str, tuple[object, str]] = {
     "Cache": (_Cache, "hyperion.ports.cache"),
     "CacheStats": (_CacheStats, "hyperion.ports.cache"),
     "CachingError": (_CachingError, "hyperion.ports.cache"),
+}
+
+# Concrete adapters + their constants -- resolved lazily so importing this
+# shim never pulls boto3 (the DynamoDB adapter).
+_MOVED_LAZY: dict[str, str] = {
+    "InMemoryCache": "hyperion.adapters.cache.memory",
+    "LocalFileCache": "hyperion.adapters.cache.filesystem",
+    "DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE": "hyperion.adapters.cache.filesystem",
+    "DynamoDBCache": "hyperion.adapters.cache.dynamodb",
+    "DYNAMODB_MAX_LENGTH": "hyperion.adapters.cache.dynamodb",
 }
 
 __all__ = [
@@ -60,209 +75,12 @@ __all__ = [
 def __getattr__(name: str) -> object:
     if name in _MOVED:
         value, new_module = _MOVED[name]
-        return moved_attr(
-            name=name, value=value, old_module="hyperion.infrastructure.cache", new_module=new_module
-        )
+        return moved_attr(name=name, value=value, old_module=_OLD_MODULE, new_module=new_module)
+    if name in _MOVED_LAZY:
+        new_module = _MOVED_LAZY[name]
+        module = importlib.import_module(new_module)
+        return moved_attr(name=name, value=getattr(module, name), old_module=_OLD_MODULE, new_module=new_module)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-class InMemoryCache(_Cache):
-    """An in-memory cache for our shenanigans."""
-
-    MAX_KEYS = 1000
-    cache: cachetools.TTLCache[str, str]
-
-    def __init__(
-        self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, max_size: int = MAX_KEYS
-    ):
-        super().__init__(prefix, hash_keys, default_ttl)
-        self.max_size = max_size
-        self.cache = cachetools.TTLCache[str, str](maxsize=self.max_size, ttl=self.default_ttl)
-
-    def _get(self, key: str) -> str | None:
-        return self.cache.get(self._key(key))
-
-    def _set(self, key: str, value: str) -> None:
-        self.cache[self._key(key)] = value
-
-    def _set_bytes(self, key: str, value: bytes) -> None:
-        self.cache[self._key(key)] = b64encode(value).decode("ascii")
-
-    def _get_bytes(self, key: str) -> bytes | None:
-        if (cached := self.cache.get(self._key(key))) is None:
-            return None
-        try:
-            return b64decode(cached.encode("ascii"))
-        except Exception as error:
-            raise _CachingError(f"Failed to decode cached key {key!r}, make sure it was stored as bytes.") from error
-
-    def _delete(self, key: str) -> None:
-        self.cache.pop(self._key(key), None)
-
-    def _clear(self) -> None:
-        self.cache.clear()
-
-    def _hit(self, key: str) -> bool:
-        return self._key(key) in self.cache
-
-
-class LocalFileCache(_Cache):
-    """A local file cache for our shenanigans."""
-
-    def __init__(
-        self,
-        prefix: str,
-        hash_keys: bool = True,
-        default_ttl: int = DEFAULT_TTL_SECONDS,
-        root_path: Path | None = None,
-        max_size: int | None = DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE,
-        use_compression: bool = True,
-    ) -> None:
-        super().__init__(prefix, hash_keys, default_ttl)
-        self.root_path = root_path or Path(tempfile.mkdtemp())
-        if self.root_path.exists() and not self.root_path.is_dir():
-            raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
-        self.use_compression = use_compression
-        self.max_size = max_size
-        self._assert_root_path()
-        logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
-        if not hash_keys:
-            logger.warning("When using filesystem cache, it is recommended to hash keys.")
-        self.shrink_to_fit_max_size()
-
-    def _assert_root_path(self) -> None:
-        self.root_path.mkdir(parents=True, exist_ok=True)
-
-    def _cleanup(self) -> None:
-        """Clean up all expired files from the cache."""
-        self._assert_root_path()
-        for key_path in self.root_path.iterdir():
-            if key_path.is_file() and self._is_expired(key_path):
-                logger.debug("Cleaning up expired file.", key_path=key_path)
-                key_path.unlink()
-
-    def get_total_size(self) -> int:
-        self._assert_root_path()
-        return sum(key_path.stat().st_size for key_path in self.root_path.iterdir() if key_path.is_file())
-
-    @overload
-    @contextmanager
-    def _open(self, key: str, mode: Literal["str"]) -> Iterator[IO[str]]:
-        pass
-
-    @overload
-    @contextmanager
-    def _open(self, key: str, mode: Literal["bytes"]) -> Iterator[IO[bytes]]:
-        pass
-
-    @contextmanager
-    def _open(self, key: str, mode: CacheKeyOpenMode = "str") -> Iterator[IO[str] | IO[bytes]]:
-        self.hit(key)  # this should expire the file if needed
-        if self.use_compression:
-            logger.warning(
-                "Current LocalFileCache implementation does not work well with compression on. "
-                "It compresses the content in-memory. For now, you should consider using "
-                "use_compression=False and utilizing e.g. snappy or gzip manually."
-            )
-            with super()._open(key, mode) as file:
-                yield file
-            return
-        key_path = self._key_path(key)
-        key_path.touch(exist_ok=True)
-        if mode == "str":
-            with key_path.open("a+") as file:
-                file.seek(0)
-                yield file
-        elif mode == "bytes":
-            with key_path.open("a+b") as file:
-                file.seek(0)
-                yield file
-        else:
-            raise ValueError(f"Unsupported open mode {mode!r} - 'str' or 'bytes' are supported.")
-        if not key_path.stat().st_size:
-            key_path.unlink(missing_ok=True)
-
-    def shrink_to_fit_max_size(self) -> None:
-        self._cleanup()
-        if not self.max_size or self.max_size < 0:
-            return
-        total_size = self.get_total_size()
-        keys_ordered = sorted(self.root_path.iterdir(), key=lambda key: key.stat().st_mtime)
-        while total_size > self.max_size:
-            key_path = keys_ordered.pop(0)
-            if not key_path.is_file():
-                continue
-            size = key_path.stat().st_size
-            logger.debug("Cleaning up old file to make some space.", key_path=key_path, size=size)
-            key_path.unlink()
-            total_size -= size
-
-    def _key_path(self, key: str) -> Path:
-        return self.root_path / self._key(key)
-
-    def _is_expired(self, key: str | Path) -> bool:
-        self._assert_root_path()
-        if isinstance(key, str):
-            key = self._key_path(key)
-        current_time = time.time()
-        return (current_time - key.stat().st_mtime) > self.default_ttl
-
-    def _get(self, key: str) -> str | None:
-        if (cached := self._get_bytes(key)) is None:
-            return None
-        return cached.decode("utf-8")
-
-    def _get_bytes(self, key: str) -> bytes | None:
-        self._assert_root_path()
-        if not self.hit(key):
-            return None
-        key_path = self._key_path(key)
-        logger.debug("Reading key from file.", key=key, path=key_path.as_posix())
-        content = key_path.read_bytes()
-        if self.use_compression:
-            return self._decompress_bytes(content)
-        return content
-
-    def _perform_set(self, key: str, value: str | bytes) -> None:
-        self._assert_root_path()
-        key_path = self._key_path(key)
-        logger.debug("Storing key into a file.", key=key, path=key_path.as_posix())
-        if isinstance(value, str):
-            value = value.encode("utf-8")
-        content = self._compress_bytes(value) if self.use_compression else value
-        key_path.write_bytes(content)
-
-    def _set(self, key: str, value: str) -> None:
-        return self._perform_set(key, value)
-
-    def _set_bytes(self, key: str, value: bytes) -> None:
-        return self._perform_set(key, value)
-
-    def _delete(self, key: str) -> None:
-        self._assert_root_path()
-        key_path = self._key_path(key)
-        if not key_path.exists():
-            return None
-        logger.debug("Removing cached key.", key=key, path=key_path.as_posix())
-        key_path.unlink()
-
-    def _hit(self, key: str) -> bool:
-        key_path = self._key_path(key)
-        if not key_path.exists():
-            return False
-        if self._is_expired(key_path):
-            logger.debug("Key is expired, deleting file.", key=key, key_path=key_path)
-            key_path.unlink()
-            return False
-        return True
-
-    def _clear(self) -> None:
-        self._assert_root_path()
-        for file in self.root_path.iterdir():
-            if not file.is_file():
-                continue
-            logger.debug("Removing cached key.", path=file.as_posix())
-            file.unlink()
 
 
 class PersistentCache(_Cache):
@@ -358,75 +176,3 @@ class PersistentCache(_Cache):
 
     def _hit(self, key: str) -> bool:
         return self._key(key) in self.data
-
-
-class DynamoDBCache(_Cache):
-    """A DynamoDB cache for our shenanigans."""
-
-    TTL_ATTRIBUTE_NAME = "time_to_live"
-
-    def __init__(
-        self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS, table_name: str | None = None
-    ):
-        super().__init__(prefix, hash_keys, default_ttl)
-        self.client = boto3.resource("dynamodb")
-        if table_name is None:
-            raise ValueError("No table_name was provided for DynamoDBCache.")
-        self.table_name = table_name
-        self.table = self.client.Table(table_name)
-
-    def _get(self, key: str) -> str | None:
-        if (cached := self._get_bytes(key)) is None:
-            return None
-        return cached.decode("utf-8")
-
-    def _set(self, key: str, value: str) -> None:
-        return self._set_bytes(key, value.encode("utf-8"))
-
-    def _set_bytes(self, key: str, value: bytes) -> None:
-        expiration_time = int(time.time()) + self.default_ttl
-        cache_key = self._key(key)
-        compressed_value = self._compress_bytes(value)
-        if len(compressed_value) > DYNAMODB_MAX_LENGTH:
-            logger.warning(
-                "Value is too long to store in DynamoDB.",
-                original_key=cache_key,
-                cache_key=cache_key,
-                length=len(compressed_value),
-            )
-            raise _CachingError(f"Value is too long to store in DynamoDB: {len(compressed_value)}")
-        self.table.put_item(
-            Item={"key": cache_key, "value": compressed_value, self.TTL_ATTRIBUTE_NAME: expiration_time}
-        )
-
-    def _get_bytes(self, key: str) -> bytes | None:
-        cache_key = self._key(key)
-        response = self.table.get_item(Key={"key": cache_key})
-        item = response.get("Item")
-        if item:
-            return self._decompress_bytes(bytes(cast(Any, item["value"])))
-        return None
-
-    def _delete(self, key: str) -> None:
-        key = self._key(key)
-        self.table.delete_item(Key={"key": key})
-
-    def _clear(self) -> None:
-        """
-        Deletes all items in the table.
-
-        Warning: DynamoDB doesn't have a built-in clear mechanism, so we scan and delete all items manually.
-        """
-        logger.info("Clearing cache.", cache_table=self.table_name)
-        scan = self.table.scan()
-        with self.table.batch_writer() as batch:
-            for item in scan["Items"]:
-                batch.delete_item(Key={"key": item["key"]})
-
-    def _hit(self, key: str) -> bool:
-        cache_key = self._key(key)
-        item = self.table.get_item(Key={"key": cache_key}, ProjectionExpression=self.TTL_ATTRIBUTE_NAME).get("Item")
-        if not item:
-            return False
-        item_ttl = int(cast(Any, item.get(self.TTL_ATTRIBUTE_NAME) or 0))
-        return bool(item and item_ttl > int(time.time()))

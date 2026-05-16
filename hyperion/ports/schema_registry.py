@@ -1,7 +1,7 @@
 """Port: schema store abstraction.
 
 Abstract :class:`SchemaStore` base. Concrete adapters (``LocalSchemaStore``,
-``S3SchemaStore``) live in ``hyperion.catalog.schema`` until step S6;
+``S3SchemaStore``) live in ``hyperion.adapters.schema_registry.*``;
 ``_create_new`` reaches them via a deferred import. ``AssetProtocol`` /
 ``AssetType`` are referenced only in annotations, so this port stays free of
 the pandera/polars data stack.
@@ -64,7 +64,8 @@ class SchemaStore(abc.ABC):
 
     @staticmethod
     def _create_new(path: str) -> SchemaStore:
-        from hyperion.catalog.schema import LocalSchemaStore, S3SchemaStore
+        from hyperion.adapters.schema_registry.local import LocalSchemaStore
+        from hyperion.adapters.schema_registry.s3 import S3SchemaStore
 
         parsed = urlparse(path)
         if parsed.scheme == "file" or not parsed.scheme:

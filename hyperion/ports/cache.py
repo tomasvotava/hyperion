@@ -2,8 +2,9 @@
 
 Abstract :class:`Cache` base plus its contract types (:class:`CacheStats`,
 :class:`CachingError`). Concrete adapters (``InMemoryCache``, ``LocalFileCache``,
-``DynamoDBCache``, ``PersistentCache``) live in ``hyperion.infrastructure.cache``
-until step S6; ``Cache.from_config`` reaches them via a deferred import.
+``DynamoDBCache``) live in ``hyperion.adapters.cache.*``; ``Cache.from_config``
+reaches them via a deferred import. ``PersistentCache`` still lives in
+``hyperion.infrastructure.cache`` until step S7.
 """
 
 import hashlib
@@ -75,7 +76,9 @@ class Cache(ABC):
         Returns:
             Cache: A cache instance.
         """
-        from hyperion.infrastructure.cache import DynamoDBCache, InMemoryCache, LocalFileCache
+        from hyperion.adapters.cache.dynamodb import DynamoDBCache
+        from hyperion.adapters.cache.filesystem import LocalFileCache
+        from hyperion.adapters.cache.memory import InMemoryCache
 
         instance_key = (storage_config.cache_key_prefix, True)
         if instance_key not in Cache._instances:

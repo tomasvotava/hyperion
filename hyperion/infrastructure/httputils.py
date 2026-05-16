@@ -1,41 +1,36 @@
-from urllib.parse import urlparse
+"""Deprecated import shim for HTTP proxy helpers.
 
-import httpx
+.. deprecated::
+    :func:`redact_url` and :func:`get_proxy_mounts` moved to
+    :mod:`hyperion.adapters.http.proxy`. Import them from there. This module
+    keeps them importable (with a :class:`DeprecationWarning`, resolved lazily)
+    for the whole ``hyperion-sdk`` 1.x line. The symbols are removed in 2.0.
+"""
 
-from hyperion.config import http_config
-from hyperion.log import get_logger
+import importlib
+from typing import TYPE_CHECKING
 
-logger = get_logger("hyperion-http")
+from hyperion._compat import moved_attr
+
+if TYPE_CHECKING:
+    from hyperion.adapters.http.proxy import get_proxy_mounts, redact_url
+
+_OLD_MODULE = "hyperion.infrastructure.httputils"
+
+_MOVED_LAZY: dict[str, str] = {
+    "redact_url": "hyperion.adapters.http.proxy",
+    "get_proxy_mounts": "hyperion.adapters.http.proxy",
+}
+
+__all__ = [
+    "get_proxy_mounts",
+    "redact_url",
+]
 
 
-def redact_url(url: str, replace: str = "***") -> str:
-    """Replace password from {url} (if any) with {replace}.
-    If the url contains no password, url is returned unchanged.
-    """
-    parsed = urlparse(url)
-    if parsed.password:
-        return parsed._replace(netloc=f"{parsed.username}:{replace}@{parsed.hostname}").geturl()
-    return url
-
-
-def get_proxy_mounts() -> dict[str, httpx.AsyncHTTPTransport]:
-    """Build httpx proxy mounts from HYPERION_HTTP_PROXY_HTTP / HYPERION_HTTP_PROXY_HTTPS env vars.
-
-    If only one of the two is set, it is used for both http:// and https://.
-    """
-    proxy_mounts: dict[str, httpx.AsyncHTTPTransport] = {}
-    if http_config.proxy_http:
-        redacted_url = redact_url(http_config.proxy_http)
-        logger.info("Configuring HTTP proxy for http://", proxy_url=redacted_url)
-        proxy_mounts["http://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_http)
-        if not http_config.proxy_https:
-            logger.info("Configuring HTTP proxy for https://", proxy_url=redacted_url)
-            proxy_mounts["https://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_http)
-    if http_config.proxy_https:
-        redacted_url = redact_url(http_config.proxy_https)
-        logger.info("Configuring HTTP proxy for https://", proxy_url=redacted_url)
-        proxy_mounts["https://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_https)
-        if not http_config.proxy_http:
-            logger.info("Configuring HTTP proxy for http://", proxy_url=redacted_url)
-            proxy_mounts["http://"] = httpx.AsyncHTTPTransport(proxy=http_config.proxy_https)
-    return proxy_mounts
+def __getattr__(name: str) -> object:
+    if name in _MOVED_LAZY:
+        new_module = _MOVED_LAZY[name]
+        module = importlib.import_module(new_module)
+        return moved_attr(name=name, value=getattr(module, name), old_module=_OLD_MODULE, new_module=new_module)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
