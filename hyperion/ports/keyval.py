@@ -1,21 +1,25 @@
 """Port: key-value store abstraction.
 
-Abstract :class:`KeyValueStore` base and the :data:`CompressionType` alias.
-If you need a store with a TTL, look at :class:`hyperion.ports.cache.Cache`
-instead. Concrete adapters (``DynamoDBStore``, ``InMemoryStore``) and the
-``is_valid_compression_type`` guard live in ``hyperion.infrastructure.keyval``
-until step S6.
+Abstract :class:`KeyValueStore` base, the :data:`CompressionType` alias and
+the :func:`is_valid_compression_type` guard. If you need a store with a TTL,
+look at :class:`hyperion.ports.cache.Cache` instead. Concrete adapters
+(``DynamoDBStore``, ``InMemoryStore``, ``FilesystemStore``) live in
+``hyperion.adapters.keyval.*``.
 """
 
 import gzip
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
 from fnmatch import fnmatch
-from typing import Literal, cast
+from typing import Literal, TypeGuard, cast
 
 import snappy
 
 CompressionType = Literal["snappy", "gzip"]
+
+
+def is_valid_compression_type(compression_type: str) -> TypeGuard[CompressionType]:
+    return compression_type in ("snappy", "gzip")
 
 
 class KeyValueStore(ABC, Iterable[str]):

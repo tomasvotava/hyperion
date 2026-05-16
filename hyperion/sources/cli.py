@@ -9,7 +9,7 @@ from aws_lambda_typing.events.sqs import SQSEvent, SQSMessage
 
 from hyperion.config import queue_config
 from hyperion.dateutils import utcnow
-from hyperion.infrastructure.message_queue import SourceBackfillMessage, create_backfill_event
+from hyperion.domain.messages import SourceBackfillMessage, create_backfill_event
 from hyperion.log import get_logger
 from hyperion.sources.base import Source, SourceEventType, SourceParamsType
 from hyperion.typeutils import is_typed_dict_instance

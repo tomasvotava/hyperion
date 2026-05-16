@@ -10,16 +10,13 @@ from typing import Any, ClassVar, TypeAlias, cast
 from aws_lambda_typing.context import Context
 from aws_lambda_typing.events import EventBridgeEvent, SQSEvent
 
+from hyperion.adapters.queue.filesystem import FileQueue
+from hyperion.adapters.queue.sqs import SQSQueue
 from hyperion.asyncutils import AsyncTaskQueue, get_loop
 from hyperion.catalog import Catalog
 from hyperion.config import source_config, storage_config
 from hyperion.domain.assets import DataLakeAsset
-from hyperion.infrastructure.message_queue import (
-    FileQueue,
-    SourceBackfillMessage,
-    SQSQueue,
-    iter_messages_from_sqs_event,
-)
+from hyperion.domain.messages import SourceBackfillMessage, iter_messages_from_sqs_event
 from hyperion.log import get_logger
 from hyperion.ports.queue import Queue
 

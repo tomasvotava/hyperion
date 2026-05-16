@@ -82,7 +82,7 @@ def test_s3_schema_store_lru_cache_avoids_second_call() -> None:
     by counting the number of S3 GETs via a request-counting wrapper around the
     underlying boto3 client.
     """
-    from hyperion.catalog import schema as schema_module
+    from hyperion.adapters.schema_registry import s3 as schema_module
 
     s3 = boto3.client("s3")
     bucket = "schemas-lru-bucket"

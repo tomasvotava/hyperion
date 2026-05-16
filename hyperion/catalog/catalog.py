@@ -30,7 +30,7 @@ from hyperion.domain.assets import (
     FeatureAsset,
     PersistentStoreAsset,
 )
-from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage
+from hyperion.domain.messages import ArrivalEvent, DataLakeArrivalMessage
 from hyperion.log import get_logger
 from hyperion.ports.queue import Queue
 from hyperion.ports.schema_registry import SchemaStore
