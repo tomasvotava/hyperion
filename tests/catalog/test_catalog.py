@@ -2,6 +2,7 @@ import datetime
 import io
 import json
 import re
+import types
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -13,10 +14,10 @@ import pytest
 from hyperion.adapters.storage.filesystem import FilesystemStorage
 from hyperion.adapters.storage.memory import MemoryStorage
 from hyperion.adapters.storage.s3 import S3Storage
-from hyperion.catalog.catalog import AssetNotFoundError, Catalog
+from hyperion.catalog.catalog import AssetNotFoundError, Catalog, PersistentStore, WritablePersistentStore
 from hyperion.catalog.schema import LocalSchemaStore
 from hyperion.dateutils import TimeResolution, assure_timezone, quantize_datetime, utcnow
-from hyperion.domain.assets import AssetProtocol, DataLakeAsset, FeatureAsset
+from hyperion.domain.assets import AssetProtocol, DataLakeAsset, FeatureAsset, PersistentStoreAsset
 from hyperion.infrastructure.cache import LocalFileCache
 from hyperion.infrastructure.message_queue import (
     ArrivalEvent,
@@ -336,8 +337,6 @@ def test_from_config_uses_correct_per_store_prefixes(monkeypatch: pytest.MonkeyP
     Pins the Step 5 bug-fix: the pre-refactor `from_config()` fed the data-lake
     prefix into the feature store.
     """
-    import types
-
     fake_config = types.SimpleNamespace(
         data_lake_bucket="dl-bucket",
         feature_store_bucket="fs-bucket",
@@ -562,3 +561,116 @@ class TestFeatureStorePartitionQuantization:
             catalog.iter_feature_store_partitions("superfeature", TimeResolution(1, "d"), date_from, date_to)
         )
         assert {p.partition_date for p in partitions} == set(SUPERFEATURE_PARTITION_DATES)
+
+
+# -----------------------------------------------------------------------------
+# Storage-port rewiring of the previously S3Client-only / untested paths
+# (persistent store, async store, repartitioner). Now trivially testable
+# against MemoryStorage.
+# -----------------------------------------------------------------------------
+
+_PSTORE_SCHEMA = {"type": "record", "name": "PStore", "fields": [{"name": "id", "type": "string"}]}
+_TS_SCHEMA = {
+    "type": "record",
+    "name": "Repart",
+    "fields": [
+        {"name": "id", "type": "string"},
+        {"name": "timestamp", "type": {"type": "long", "logicalType": "timestamp-micros"}},
+    ],
+}
+
+
+class TestPersistentStore:
+    @pytest.fixture(autouse=True)
+    def _isolate_singletons(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # PersistentStore caches instances on a shared class-level dict.
+        PersistentStore._instances.clear()
+        # WritablePersistentStore.store() builds its schema store from env.
+        monkeypatch.setattr(
+            "hyperion.catalog.catalog.SchemaStore",
+            types.SimpleNamespace(
+                from_config=lambda: types.SimpleNamespace(get_asset_schema=lambda asset: _PSTORE_SCHEMA)
+            ),
+        )
+
+    def test_write_then_retrieve_round_trip(self) -> None:
+        storage = MemoryStorage()
+        asset = PersistentStoreAsset("pstore")
+        WritablePersistentStore(asset, storage).store([{"id": "a"}, {"id": "b"}])
+
+        # Decode straight from storage to confirm the bytes round-trip.
+        raw = storage.get(asset.get_path())
+        assert list(fastavro.reader(io.BytesIO(raw))) == [{"id": "a"}, {"id": "b"}]
+
+        PersistentStore._instances.clear()
+        store = PersistentStore(asset, storage)
+        store.retrieve()
+        assert store._local_path is not None
+        local_path = store._local_path
+        assert list(fastavro.reader(local_path.open("rb"))) == [{"id": "a"}, {"id": "b"}]
+
+        # Second retrieve with an unchanged etag must short-circuit (same file).
+        store.retrieve()
+        assert store._local_path == local_path
+
+        store.cleanup()
+        assert store._local_path is None
+        assert not local_path.exists()
+
+    def test_retrieve_missing_raises_asset_not_found(self) -> None:
+        with pytest.raises(AssetNotFoundError, match=r"Asset 'ghost' not found"):
+            PersistentStore(PersistentStoreAsset("ghost"), MemoryStorage()).retrieve()
+
+
+class TestStoreAssetAsync:
+    async def test_store_asset_async_round_trip(self, test_tmp_dir: Path) -> None:
+        schema = {"type": "record", "name": "Async", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "async-asset.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(test_tmp_dir / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        asset = DataLakeAsset("async-asset", utcnow())
+        data = [{"id": "a"}, {"id": "b"}]
+        await catalog.store_asset_async(asset, data, notify=True, schema_path=schema_path.as_posix())
+
+        assert list(catalog.retrieve_asset(asset)) == data
+        queue = catalog.queue
+        assert isinstance(queue, InMemoryQueue)
+        assert len(queue._messages) == 1
+
+
+class TestRepartition:
+    async def test_repartition_data_lake_asset_by_day(self, tmp_path: Path) -> None:
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        day_one = datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.timezone.utc)
+        day_two = datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.timezone.utc)
+        records = [
+            {"id": "a", "timestamp": day_one},
+            {"id": "b", "timestamp": day_one.replace(hour=20)},
+            {"id": "c", "timestamp": day_two},
+        ]
+        source_asset = DataLakeAsset("repart", day_one)
+
+        await catalog.repartition(source_asset, "d", date_attribute="timestamp", data=records)
+
+        partitions = sorted(catalog.iter_datalake_partitions("repart"), key=lambda asset: asset.date)
+        assert [p.date for p in partitions] == [
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc),
+        ]
+        first_day = list(catalog.retrieve_asset(partitions[0]))
+        assert {row["id"] for row in first_day} == {"a", "b"}
+        second_day = list(catalog.retrieve_asset(partitions[1]))
+        assert {row["id"] for row in second_day} == {"c"}
