@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.2 (2026-05-16)
+
+### Refactor
+
+- **geo**: extract pure-domain Location, drop cache singleton
+- split typeutils and asset identities from the data stack
+- **ports**: extract abstract bases into hyperion/ports
+
 ## 0.15.1 (2026-05-12)
 
 ### Fix
