@@ -140,6 +140,26 @@ def test_domain_geo_does_not_pull_cache_port() -> None:
     assert "hyperion.ports.cache" not in _loaded_modules("hyperion.domain.geo")
 
 
+# -- S4 (F1 part 1) landed: StoragePort + adapters. The memory/filesystem
+#    adapters and the adapters namespace are lite -- importing them must not
+#    drag boto3 / the data stack. (hyperion.adapters.storage.s3 legitimately
+#    imports boto3 and is deliberately excluded here.) --
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "hyperion.adapters",
+        "hyperion.adapters.storage",
+        "hyperion.adapters.storage.memory",
+        "hyperion.adapters.storage.filesystem",
+    ],
+)
+def test_lite_storage_adapters_pull_no_heavy_deps(module: str) -> None:
+    hits = _heavy_pulled_in(module)
+    assert hits == set(), f"{module} unexpectedly imports {sorted(hits)}"
+
+
 # -- This module currently violates the promise; the refactor fixes it --
 # `strict=True` means the marker fails CI as soon as the test starts passing —
 # forcing the marker to be removed when the corresponding refactor step lands.
