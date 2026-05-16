@@ -3,18 +3,15 @@
 import asyncio
 import datetime
 import re
+import shutil
 import tempfile
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypedDict, TypeVar, cast
+from typing import IO, TYPE_CHECKING, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypeVar, cast
 from uuid import uuid4
 
-import botocore.exceptions
-import fastavro
-import fastavro.validation
-import fastavro.write
-
+from hyperion.adapters.serialization.avro import AvroSerializer, AvroStreamWriter
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
 from hyperion.config import storage_config
 from hyperion.dateutils import (
@@ -28,16 +25,16 @@ from hyperion.dateutils import (
 )
 from hyperion.domain.assets import (
     AssetProtocol,
+    AssetType,
     DataLakeAsset,
     FeatureAsset,
     PersistentStoreAsset,
-    get_prefixed_path,
 )
-from hyperion.infrastructure.aws import S3Client
 from hyperion.infrastructure.message_queue import ArrivalEvent, DataLakeArrivalMessage
 from hyperion.log import get_logger
 from hyperion.ports.queue import Queue
 from hyperion.ports.schema_registry import SchemaStore
+from hyperion.ports.storage import ObjectNotFoundError, StoragePort
 
 if TYPE_CHECKING:
     from hyperion.ports.cache import Cache
@@ -48,13 +45,6 @@ logger = get_logger("catalog")
 
 RepartitionableAssetType: TypeAlias = FeatureAsset | DataLakeAsset
 RepartitionableAsset = TypeVar("RepartitionableAsset", bound=RepartitionableAssetType)
-
-
-class StoreBucketConfig(TypedDict):
-    """Configuration for storing assets in a bucket."""
-
-    bucket: str
-    prefix: str
 
 
 class CatalogError(Exception):
@@ -80,7 +70,7 @@ class PersistentStore:
 
     # TODO: Unfinished business
     # https://github.com/Zephyr-Trade/FVE-map/issues/9
-    _instances: ClassVar[dict[tuple[PersistentStoreAsset, str, str], "PersistentStore"]] = {}
+    _instances: ClassVar[dict[tuple[Any, ...], "PersistentStore"]] = {}
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "PersistentStore":
         init_arguments = _unpack_args(*args, **kwargs)
@@ -88,19 +78,15 @@ class PersistentStore:
             cls._instances[init_arguments] = super().__new__(cls)
         return cls._instances[init_arguments]
 
-    def __init__(
-        self, asset: PersistentStoreAsset, persistent_store_bucket: str, persistent_store_prefix: str = ""
-    ) -> None:
+    def __init__(self, asset: PersistentStoreAsset, storage: StoragePort) -> None:
         """Initialize the persistent store.
 
         Args:
             asset (PersistentStoreAsset): The asset to store.
-            persistent_store_bucket (str): The bucket to store the asset in.
-            persistent_store_prefix (str): The prefix for the asset in the bucket.
+            storage (StoragePort): The storage backend the asset lives in.
         """
         self.asset = asset
-        self.persistent_store_bucket = persistent_store_bucket
-        self.persistent_store_prefix = persistent_store_prefix
+        self.storage = storage
         self._local_path: Path | None = None
         self._etag: str | None = None
 
@@ -119,16 +105,11 @@ class PersistentStore:
         self._local_path = None
 
     def retrieve(self) -> None:
-        """Retrieve the persistent store from the S3 bucket."""
-        s3_client = S3Client()
+        """Retrieve the persistent store from its storage backend."""
         try:
-            remote_etag = s3_client.get_object_attributes(
-                self.persistent_store_bucket, self.asset.get_path(self.persistent_store_prefix)
-            ).etag
-        except botocore.exceptions.ClientError as error:
-            if error.response["Error"]["Code"] == "NoSuchKey":
-                raise AssetNotFoundError(self.asset) from error
-            raise
+            remote_etag = self.storage.get_attributes(self.asset.get_path()).etag
+        except ObjectNotFoundError as error:
+            raise AssetNotFoundError(self.asset) from error
         if self._local_path is not None:
             if remote_etag == self._etag:
                 logger.info(
@@ -148,7 +129,8 @@ class PersistentStore:
 
         local_path = Path(tempfile.gettempdir()) / f"{uuid4().hex}.asset"
         logger.info("Retrieving persistent store.", asset=self.asset, path=local_path.as_posix())
-        s3_client.download(self.persistent_store_bucket, self.asset.get_path(self.persistent_store_prefix), local_path)
+        with self.storage.open(self.asset.get_path()) as source, local_path.open("wb") as destination:
+            shutil.copyfileobj(source, destination)
         self._local_path = local_path
         self._etag = remote_etag
 
@@ -173,25 +155,9 @@ class WritablePersistentStore(PersistentStore):
         with tempfile.TemporaryFile("+wb") as file:
             logger.info("Pouring persistent store asset into temporary file.", asset=self.asset, path=file.name)
             schema = SchemaStore.from_config().get_asset_schema(self.asset)
-            _write_avro(file, schema, data, self.asset.to_metadata())
-            s3_client = S3Client()
-            s3_client.upload(file, self.persistent_store_bucket, self.asset.get_path(self.persistent_store_prefix))
-
-
-def _write_avro(
-    fp: BinaryIO | IO[bytes], schema: dict[str, Any], data: Iterable[dict[str, Any]], metadata: dict[str, str]
-) -> None:
-    fastavro.writer(
-        fp,
-        records=data,
-        schema=schema,
-        codec="deflate",
-        validator=True,
-        codec_compression_level=7,
-        strict=False,
-        strict_allow_default=True,
-        metadata=metadata,
-    )
+            AvroSerializer().write(file, schema, data, self.asset.to_metadata())
+            file.seek(0)
+            self.storage.put(self.asset.get_path(), file)
 
 
 class Catalog:
@@ -200,43 +166,38 @@ class Catalog:
     The catalog is responsible for storing and retrieving assets.
     """
 
+    _ASSET_TYPES: ClassVar[tuple[AssetType, ...]] = ("data_lake", "feature", "persistent_store")
+
     def __init__(
         self,
         *,
-        data_lake_bucket: str,
-        feature_store_bucket: str,
-        persistent_store_bucket: str,
-        data_lake_prefix: str = "",
-        feature_store_prefix: str = "",
-        persistent_store_prefix: str = "",
+        storage: StoragePort | Mapping[AssetType, StoragePort],
         queue: Queue | None = None,
         cache: "Cache | None" = None,
         schema_store: "SchemaStore | None" = None,
+        serializer: AvroSerializer | None = None,
     ) -> None:
         """Initialize the catalog.
 
         Args:
-            data_lake_bucket (str): The bucket for data lake assets.
-            feature_store_bucket (str): The bucket for feature store assets.
-            persistent_store_bucket (str): The bucket for persistent store assets.
-            data_lake_prefix (str): The prefix for data lake assets.
-            feature_store_prefix (str): The prefix for feature store assets.
-            persistent_store_prefix (str): The prefix for persistent store assets.
+            storage (StoragePort | Mapping[AssetType, StoragePort]): The storage
+                backend. A single port serves every asset type; pass a mapping
+                keyed by asset type ("data_lake"/"feature"/"persistent_store")
+                to route each type to a different backend (this is how
+                :meth:`from_config` preserves today's per-bucket S3 layout).
             queue (Queue, optional): The queue to use for notifications. Defaults to None.
             cache (Cache, optional): The cache to use for storing assets for quicker re-retrieval. Defaults to None.
+            schema_store (SchemaStore, optional): The schema store. Defaults to ``SchemaStore.from_config()``.
+            serializer (AvroSerializer, optional): The avro serializer. Defaults to a fresh ``AvroSerializer``.
         """
-        self.data_lake_bucket = data_lake_bucket
-        self.feature_store_bucket = feature_store_bucket
-        self.persistent_store_bucket = persistent_store_bucket
-        self.data_lake_prefix = data_lake_prefix
-        self.feature_store_prefix = feature_store_prefix
-        self.persistent_store_prefix = persistent_store_prefix
-        self._config_map: dict[type[AssetProtocol], StoreBucketConfig] = {
-            DataLakeAsset: {"bucket": self.data_lake_bucket, "prefix": self.data_lake_prefix},
-            PersistentStoreAsset: {"bucket": self.persistent_store_bucket, "prefix": self.persistent_store_prefix},
-            FeatureAsset: {"bucket": self.feature_store_bucket, "prefix": self.feature_store_prefix},
-        }
-        self._s3_client: S3Client | None = None
+        if isinstance(storage, Mapping):
+            missing = [asset_type for asset_type in self._ASSET_TYPES if asset_type not in storage]
+            if missing:
+                raise ValueError(f"storage mapping is missing adapters for asset types: {missing}.")
+            self._storage: dict[AssetType, StoragePort] = dict(storage)
+        else:
+            self._storage = {asset_type: storage for asset_type in self._ASSET_TYPES}
+        self._serializer = serializer or AvroSerializer()
         self.queue = queue or Queue.from_config()
         self.cache = cache
         if self.cache is not None and not self.cache.hash_keys:
@@ -247,23 +208,36 @@ class Catalog:
 
         self.schema_store = schema_store or SchemaStore.from_config()
 
-    @property
-    def s3_client(self) -> S3Client:
-        """Get the S3 client."""
-        if self._s3_client is None:
-            self._s3_client = S3Client()
-        return self._s3_client
+    def _resolve_storage(self, asset: AssetProtocol | type[AssetProtocol]) -> StoragePort:
+        try:
+            return self._storage[asset.asset_type]
+        except KeyError:
+            logger.error("No storage configured for asset type.", asset=asset, asset_type=asset.asset_type)
+            raise
 
     @staticmethod
     def from_config() -> "Catalog":
-        """Create a catalog from the configuration."""
+        """Create a catalog from the configuration.
+
+        Builds one :class:`~hyperion.adapters.storage.s3.S3Storage` per asset
+        type so the on-S3 key layout (bucket + prefix per store) is identical to
+        the pre-refactor catalog. (Fixes a long-standing bug where the feature
+        store used the *data lake* prefix.)
+        """
+        from hyperion.adapters.storage.s3 import S3Storage
+
+        def _prefix(value: str) -> str:
+            value = value.strip("/")
+            return f"{value}/" if value else ""
+
         return Catalog(
-            data_lake_bucket=storage_config.data_lake_bucket,
-            feature_store_bucket=storage_config.feature_store_bucket,
-            persistent_store_bucket=storage_config.persistent_store_bucket,
-            data_lake_prefix=storage_config.data_lake_prefix,
-            feature_store_prefix=storage_config.data_lake_prefix,
-            persistent_store_prefix=storage_config.persistent_store_prefix,
+            storage={
+                "data_lake": S3Storage(storage_config.data_lake_bucket, _prefix(storage_config.data_lake_prefix)),
+                "feature": S3Storage(storage_config.feature_store_bucket, _prefix(storage_config.feature_store_prefix)),
+                "persistent_store": S3Storage(
+                    storage_config.persistent_store_bucket, _prefix(storage_config.persistent_store_prefix)
+                ),
+            }
         )
 
     @contextmanager
@@ -278,7 +252,7 @@ class Catalog:
             )
             path = Path(file.name)
             logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
-            _write_avro(file, schema, data, asset.to_metadata())
+            self._serializer.write(file, schema, data, asset.to_metadata())
             logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
             file.seek(0)
             yield file
@@ -293,13 +267,10 @@ class Catalog:
             data (Iterable[dict[str, Any]]): The data to store.
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
-        store_config = self.get_store_config(asset)
-        logger.info("Preparing asset storage.", asset=asset, **store_config)
+        logger.info("Preparing asset storage.", asset=asset)
         with ExitStack() as stack:
             file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data, schema_path))
-            await self.s3_client.upload_async(
-                file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
-            )
+            await self._resolve_storage(asset).put_async(asset.get_path(), file)
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
 
@@ -345,20 +316,11 @@ class Catalog:
             data (Iterable[dict[str, Any]]): The data to store.
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
-        store_config = self.get_store_config(asset)
-        logger.info("Preparing asset storage.", asset=asset, **store_config)
+        logger.info("Preparing asset storage.", asset=asset)
         with self._prepare_asset_storage(asset, data, schema_path) as file:
-            self.s3_client.upload(file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"]))
+            self._resolve_storage(asset).put(asset.get_path(), file)
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
-
-    def get_store_config(self, asset: AssetProtocol | type[AssetProtocol]) -> StoreBucketConfig:
-        try:
-            config_key = asset if isinstance(asset, type) else asset.__class__
-            return self._config_map[config_key]
-        except KeyError:
-            logger.error("Attempting to get store config for an unsupported asset type.", asset=asset)
-            raise
 
     def get_asset_file_size(self, asset: AssetProtocol) -> int:
         """Find asset avro file and get its file size in bytes.
@@ -369,26 +331,19 @@ class Catalog:
         Returns:
             int: The file size in bytes.
         """
-        store_config = self.get_store_config(asset)
-
-        object_path = asset.get_path(store_config["prefix"])
-        logger.info("Getting attributes for an asset.", asset=asset, **store_config)
+        logger.info("Getting attributes for an asset.", asset=asset)
         try:
-            return self.s3_client.get_object_attributes(store_config["bucket"], object_path).object_size
-        except botocore.exceptions.ClientError as error:
-            if error.response["Error"]["Code"] == "NoSuchKey":
-                raise AssetNotFoundError(asset) from error
-            raise
+            return self._resolve_storage(asset).get_attributes(asset.get_path()).size
+        except ObjectNotFoundError as error:
+            raise AssetNotFoundError(asset) from error
 
     def _get_cache_key(self, asset: AssetProtocol) -> str:
-        store_config = self.get_store_config(asset)
-        path = asset.get_path(store_config["prefix"])
-        return f"{store_config['bucket']}:{path}"
+        return f"{asset.asset_type}:{asset.get_path()}"
 
     def _iter_data_from_downloaded_asset(
         self, file: BinaryIO | IO[bytes], asset: AssetProtocol
     ) -> Iterator[dict[str, Any]]:
-        for row_number, row in enumerate(fastavro.reader(file), start=1):
+        for row_number, row in enumerate(self._serializer.read(file), start=1):
             if isinstance(row, dict):
                 yield row
             else:
@@ -402,14 +357,12 @@ class Catalog:
                 raise TypeError(f"Unexpected data received when reading downloaded asset data, row {row_number}")
 
     def _download_asset_into_file(self, asset: AssetProtocol, file: IO[bytes]) -> None:
-        store_config = self.get_store_config(asset)
         logger.info("Downloading asset into a file.", asset=asset, path=getattr(file, "name", None) or "unnamed")
         try:
-            self.s3_client.download(store_config["bucket"], asset.get_path(store_config["prefix"]), file)
-        except botocore.exceptions.ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "404":
-                raise AssetNotFoundError(asset) from error
-            raise
+            with self._resolve_storage(asset).open(asset.get_path()) as source:
+                shutil.copyfileobj(source, file)
+        except ObjectNotFoundError as error:
+            raise AssetNotFoundError(asset) from error
 
     @contextmanager
     def _get_asset_file_handle(self, asset: AssetProtocol, *, no_cache: bool = False) -> Iterator[IO[bytes]]:
@@ -453,18 +406,18 @@ class Catalog:
         Yields:
             DataLakeAsset: The data lake asset.
         """
-        store_config = self.get_store_config(DataLakeAsset)
-        keys_prefix = get_prefixed_path(f"{asset_name}/date={date_part if date_part else ''}", store_config["prefix"])
+        storage = self._resolve_storage(DataLakeAsset)
+        # The adapter owns its own storage-side prefix and yields keys relative
+        # to it, so iterate in the bare asset namespace.
+        keys_prefix = f"{asset_name}/date={date_part if date_part else ''}"
         version_patt = re.compile(r"v(?P<version>\d+)\.avro")
-        for key in self.s3_client.iter_objects(store_config["bucket"], keys_prefix):
-            key_without_prefix = key[len(self.data_lake_prefix) :] if self.data_lake_prefix else key
+        for key in storage.iter_keys(keys_prefix):
             try:
-                key_asset_name, partition, filename = key_without_prefix.split("/")
+                key_asset_name, partition, filename = key.split("/")
             except ValueError:
                 logger.warning(
                     "The key path does not have 'Asset/Partition/Version' format and will be skipped.",
                     key=key,
-                    key_without_prefix=key_without_prefix,
                 )
                 continue
             if key_asset_name != asset_name:
@@ -596,7 +549,7 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         self.date_attribute = date_attribute
         self._partition_name = "date" if isinstance(self.asset, DataLakeAsset) else "timestamp"
 
-        self._state: dict[datetime.datetime, tuple[IO[bytes], RepartitionableAsset, fastavro.write.Writer]] = {}
+        self._state: dict[datetime.datetime, tuple[IO[bytes], RepartitionableAsset, AvroStreamWriter]] = {}
 
     def __enter__(self) -> None:
         self._state = {}
@@ -624,19 +577,15 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
 
     def _get_handler(
         self, partition_date: datetime.datetime
-    ) -> tuple[IO[bytes], RepartitionableAsset, fastavro.write.Writer]:
+    ) -> tuple[IO[bytes], RepartitionableAsset, AvroStreamWriter]:
         if partition_date in self._state:
             return self._state[partition_date]
         logger.info("Creating a new handler for partition date.", partition_date=partition_date.isoformat())
         file = tempfile.NamedTemporaryFile("+wb")  # noqa: SIM115
         logger.info(f"Partition will be temporarily stored in {file.name!r}.", path=file.name)
         asset = self._create_partition_asset(partition_date)
-        writer = fastavro.write.Writer(
-            file,
-            schema=self.catalog.schema_store.get_asset_schema(asset),
-            codec="deflate",
-            validator=True,
-            metadata=asset.to_metadata(),
+        writer = self.catalog._serializer.streaming_writer(
+            file, self.catalog.schema_store.get_asset_schema(asset), asset.to_metadata()
         )
         handler = (file, asset, writer)
         self._state[partition_date] = handler
@@ -664,7 +613,6 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
                 partition_date = truncate_datetime(timestamp, self.granularity)
                 _, __, writer = self._get_handler(partition_date)
                 writer.write(record)
-            store_config = self.catalog.get_store_config(self.asset)
             logger.info("Finished creating partitioned avro files.")
 
             async with AsyncTaskQueue[None](maxsize=5) as queue:
@@ -672,8 +620,4 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
                     logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
                     writer.dump()
                     file.seek(0)
-                    await queue.add_task(
-                        self.catalog.s3_client.upload_async(
-                            file, bucket=store_config["bucket"], name=asset.get_path(store_config["prefix"])
-                        )
-                    )
+                    await queue.add_task(self.catalog._resolve_storage(asset).put_async(asset.get_path(), file))
