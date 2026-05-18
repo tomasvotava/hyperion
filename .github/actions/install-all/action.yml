@@ -22,5 +22,5 @@ runs:
       run: pipx install pre-commit
       shell: bash
     - name: Install individual projects
-      run: poetry install
+      run: poetry install --all-extras
       shell: bash

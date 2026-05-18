@@ -16,12 +16,20 @@ from dataclasses import dataclass, replace
 from io import BytesIO, StringIO
 from typing import IO, Any, ClassVar, Literal, cast, overload
 
-import snappy
+try:
+    import snappy
+except ImportError:  # pragma: no cover - snappy is the optional [snappy] extra
+    snappy = None
 
 from hyperion.config import storage_config
 from hyperion.log import get_logger
 
 DEFAULT_TTL_SECONDS = 60
+
+_SNAPPY_MISSING_HINT = (
+    "snappy compression requires the optional 'snappy' extra. "
+    "Install it with: pip install 'hyperion-sdk[snappy]'."
+)
 
 CacheKeyOpenMode = Literal["str", "bytes"]
 
@@ -116,6 +124,8 @@ class Cache(ABC):
 
     def _compress_bytes(self, value: bytes) -> bytes:
         """Compress a bytes value using snappy compression."""
+        if snappy is None:
+            raise ImportError(_SNAPPY_MISSING_HINT)
         compressed_value = snappy.compress(value)
         logger.debug(
             "Compressed value using snappy compression.",
@@ -131,6 +141,8 @@ class Cache(ABC):
 
     def _decompress_bytes(self, value: bytes) -> bytes:
         """Decompresses a bytes value using snappy decompression."""
+        if snappy is None:
+            raise ImportError(_SNAPPY_MISSING_HINT)
         return cast(bytes, snappy.decompress(value))
 
     @overload

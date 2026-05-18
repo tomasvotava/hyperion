@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -14,11 +13,8 @@ from hyperion.domain.messages import Message, SerializedMessage
 from hyperion.log import get_logger
 from hyperion.ports.queue import Queue
 
-if sys.version_info >= (3, 11) and TYPE_CHECKING:
+if TYPE_CHECKING:
     from typing import Self
-
-if sys.version_info < (3, 11) and TYPE_CHECKING:
-    from typing_extensions import Self
 
 logger = get_logger("hyperion-queue")
 

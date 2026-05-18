@@ -29,7 +29,7 @@ class MemoryStorage:
     def put(self, key: str, data: bytes | IO[bytes]) -> None:
         logger.debug("Storing object in memory.", key=key)
         self._store[key] = _to_bytes(data)
-        self._mtimes[key] = datetime.datetime.now(datetime.timezone.utc)
+        self._mtimes[key] = datetime.datetime.now(datetime.UTC)
 
     async def put_async(self, key: str, data: bytes | IO[bytes]) -> None:
         self.put(key, data)

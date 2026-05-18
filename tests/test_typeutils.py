@@ -1,16 +1,10 @@
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 import pytest
 
 from hyperion.typeutils import dataclass_asdict, is_typed_dict_instance
-
-if sys.version_info >= (3, 11):
-    from typing import NotRequired
-else:
-    from typing_extensions import NotRequired
 
 
 @dataclass
@@ -68,7 +62,6 @@ def test_typed_dict_instance_extra() -> None:
     assert is_typed_dict_instance(obj, SampleTypedDict)
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="Optionals do not work on TypedDicts prior to python 3.11")
 def test_typed_dict_optional() -> None:
     obj = {"field": "foo", "another_field": "bar"}
     assert is_typed_dict_instance(obj, SampleTypedDict)

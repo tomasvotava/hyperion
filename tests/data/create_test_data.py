@@ -21,7 +21,7 @@ _TEST_DATA_DIR = Path(__file__).parent
 
 def _parse_datetimes(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        column: datetime.datetime.fromisoformat(value).replace(tzinfo=datetime.timezone.utc)
+        column: datetime.datetime.fromisoformat(value).replace(tzinfo=datetime.UTC)
         if column == "date"
         else value
         for column, value in row.items()
@@ -52,7 +52,7 @@ def create_test_data() -> None:
 
 def create_test_feature() -> None:
     daily_data: dict[datetime.datetime, list[dict[str, Any]]] = defaultdict(list)
-    anchor_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+    anchor_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
     for hour in range(_TEST_FEATURE_HOURS):
         timestamp = anchor_date + datetime.timedelta(hours=hour)
         daily_data[quantize_datetime(timestamp.replace(hour=0), "1d")].append(

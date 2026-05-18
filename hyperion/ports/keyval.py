@@ -13,9 +13,17 @@ from collections.abc import Iterable, Iterator
 from fnmatch import fnmatch
 from typing import Literal, TypeGuard, cast
 
-import snappy
+try:
+    import snappy
+except ImportError:  # pragma: no cover - snappy is the optional [snappy] extra
+    snappy = None
 
 CompressionType = Literal["snappy", "gzip"]
+
+_SNAPPY_MISSING_HINT = (
+    "snappy compression requires the optional 'snappy' extra. "
+    "Install it with: pip install 'hyperion-sdk[snappy]'."
+)
 
 
 def is_valid_compression_type(compression_type: str) -> TypeGuard[CompressionType]:
@@ -59,6 +67,8 @@ class KeyValueStore(ABC, Iterable[str]):
             case None:
                 return value_bytes
             case "snappy":
+                if snappy is None:
+                    raise ImportError(_SNAPPY_MISSING_HINT)
                 return cast(bytes, snappy.compress(value_bytes))
             case "gzip":
                 return gzip.compress(value_bytes)
@@ -84,6 +94,8 @@ class KeyValueStore(ABC, Iterable[str]):
             case None:
                 return value.decode("utf-8")
             case "snappy":
+                if snappy is None:
+                    raise ImportError(_SNAPPY_MISSING_HINT)
                 value_decompressed = snappy.decompress(value)
                 if isinstance(value_decompressed, str):
                     return value_decompressed

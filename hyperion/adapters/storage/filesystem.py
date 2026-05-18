@@ -85,5 +85,5 @@ class FilesystemStorage:
         return ObjectAttributes(
             etag=hashlib.md5(target.read_bytes(), usedforsecurity=False).hexdigest(),
             size=stat.st_size,
-            last_modified=datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc),
+            last_modified=datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.UTC),
         )

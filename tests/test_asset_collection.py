@@ -23,7 +23,7 @@ from hyperion.repository.asset_collection import (
 )
 from hyperion.typeutils import DateOrDelta, PolarsUTCDateTime
 
-THE_NOW = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+THE_NOW = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
 
 
 class _FakeCatalog:
@@ -117,7 +117,7 @@ class TestAssetCollection:
     @pytest.mark.parametrize(
         ("start_date", "end_date", "expected_start_date", "expected_end_date"),
         [
-            (None, None, datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), THE_NOW),
+            (None, None, datetime.datetime.min.replace(tzinfo=datetime.UTC), THE_NOW),
             (
                 datetime.timedelta(days=-1),
                 datetime.timedelta(days=1),
@@ -125,9 +125,9 @@ class TestAssetCollection:
                 THE_NOW + datetime.timedelta(days=1),
             ),
             (
-                datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2023, 1, 1, tzinfo=datetime.UTC),
                 None,
-                datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc),
+                datetime.datetime(2023, 1, 1, tzinfo=datetime.UTC),
                 THE_NOW,
             ),
         ],
