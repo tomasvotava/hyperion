@@ -190,6 +190,20 @@ one project. Work through them in order:
   will see feature-store asset keys resolve to the corrected path (see *Catalog
   constructor change* above). Review any tooling that depended on the old path.
 
+## 0.15.2 (2026-05-18)
+
+### Refactor
+
+- **catalog**: make hyperion.catalog import lazy
+- **composition**: centralize from_config wiring
+- **geocoder**: remove PersistentCache knot, inject KeyValueStore
+- **adapters**: relocate cache/keyval/queue/secrets/schema impls
+- **catalog**: depend on StoragePort, extract avro serializer
+- **storage**: add StoragePort + memory/filesystem/s3 adapters
+- **geo**: extract pure-domain Location, drop cache singleton
+- split typeutils and asset identities from the data stack
+- **ports**: extract abstract bases into hyperion/ports
+
 ## 0.15.1 (2026-05-12)
 
 ### Fix
