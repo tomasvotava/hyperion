@@ -90,13 +90,30 @@ Sources are responsible for extracting data from external systems and storing it
 If you only want to use `hyperion`, you can install it from PyPI:
 
 ```bash
-pip install hyperion-etl
+pip install hyperion-sdk
 # or
-poetry add hyperion-etl
+poetry add hyperion-sdk
 ```
 
-We'll try to respect [Semantic Versioning](https://semver.org/), so you can pin your dependencies to a specific version,
-or use a version selector to make sure no breaking changes are introduced (e.g., `^0.4.0`).
+As of `1.0.0` the default install is a slim **lite core**. Heavy backends are opt-in
+extras — install the ones you use:
+
+| Extra | Enables |
+|---|---|
+| `hyperion-sdk[aws]` | DynamoDB cache/keyval, S3 storage/schema, SQS queue, AWS Secrets Manager |
+| `hyperion-sdk[data]` | pandera↔polars typing, asset schemas, `SpatialKMeans` |
+| `hyperion-sdk[catalog]` | avro-backed `Catalog` (works with local filesystem storage alone) |
+| `hyperion-sdk[geo]` | Google Maps geocoding (Haversine math stays lite) |
+| `hyperion-sdk[snappy]` | snappy-compressed filesystem cache / DynamoDB keyval |
+| `hyperion-sdk[all]` | everything (parity with the pre-1.0 full install) |
+
+For example, the catalog examples below need `pip install 'hyperion-sdk[catalog]'`;
+add `[aws]` as well if you store assets on S3.
+
+We follow [Semantic Versioning](https://semver.org/), so you can pin your dependencies to
+a specific version or use a version selector to avoid breaking changes (e.g., `^1.0.0`).
+**Upgrading from a pre-1.0 release?** Import paths moved and the `Catalog` constructor
+changed — see the migration guide at the top of [`CHANGELOG.md`](./CHANGELOG.md).
 
 ### From Source
 
@@ -165,8 +182,8 @@ Before any real documentation is written, you can check the
 #### Creating and Storing a DataLakeAsset
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.catalog.catalog import Catalog
+from hyperion.domain.assets import DataLakeAsset
 from datetime import datetime, timezone
 
 # Initialize the catalog
@@ -191,8 +208,8 @@ catalog.store_asset(asset, data)
 #### Working with FeatureAssets
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.entities.catalog import FeatureAsset
+from hyperion.catalog.catalog import Catalog
+from hyperion.domain.assets import FeatureAsset
 from hyperion.dateutils import TimeResolution
 from datetime import datetime, timezone
 
@@ -234,8 +251,8 @@ for feature_asset in catalog.iter_feature_store_partitions(
 #### Working with PersistentStoreAssets
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.entities.catalog import PersistentStoreAsset
+from hyperion.catalog.catalog import Catalog
+from hyperion.domain.assets import PersistentStoreAsset
 
 # Initialize the catalog
 catalog = Catalog.from_config()
@@ -262,19 +279,23 @@ for product in catalog.retrieve_asset(asset):
 #### Using a Cached Catalog
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.infrastructure.cache import LocalFileCache
 from pathlib import Path
 
-# Create a catalog with a local file cache
+from hyperion.catalog.catalog import Catalog
+from hyperion.adapters.cache.filesystem import LocalFileCache
+from hyperion.adapters.storage.filesystem import FilesystemStorage
+from hyperion.adapters.schema_registry.local import LocalSchemaStore
+
+# Create a catalog backed by local storage with a local file cache.
+# (Catalog.from_config() instead wires S3 storage from the environment; it does
+# not configure a cache — pass `cache=` explicitly, as shown here, to enable it.)
 cached_catalog = Catalog(
-    data_lake_bucket="my-data-lake-bucket",
-    feature_store_bucket="my-feature-store-bucket",
-    persistent_store_bucket="my-persistent-store-bucket",
-    cache=LocalFileCache("catalog", default_ttl=3600, root_path=Path("/tmp/hyperion-cache"))
+    storage=FilesystemStorage("/data/lake"),
+    schema_store=LocalSchemaStore(Path("/data/schemas")),
+    cache=LocalFileCache("catalog", default_ttl=3600, root_path=Path("/tmp/hyperion-cache")),
 )
 
-# First retrieval will download from S3
+# First retrieval reads from storage
 data = list(cached_catalog.retrieve_asset(asset))
 
 # Subsequent retrievals will use the cache
@@ -288,8 +309,8 @@ import asyncio
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
-from hyperion.catalog import Catalog
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.catalog.catalog import Catalog
+from hyperion.domain.assets import DataLakeAsset
 from hyperion.sources.base import Source, SourceAsset
 
 
@@ -406,8 +427,8 @@ See [`docs/asset_collections.md`](docs/asset_collections.md) for more informatio
 ### Repartitioning Data
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.entities.catalog import DataLakeAsset
+from hyperion.catalog.catalog import Catalog
+from hyperion.domain.assets import DataLakeAsset
 from hyperion.dateutils import TimeResolutionUnit
 from datetime import datetime, timezone
 import asyncio
@@ -442,7 +463,7 @@ Hyperion provides two types of caching:
 #### Key-Value Cache
 
 ```python
-from hyperion.infrastructure.cache import Cache
+from hyperion.ports.cache import Cache
 
 # Get cache from configuration
 cache = Cache.from_config()
@@ -465,25 +486,28 @@ cache.delete("my-key")
 #### Catalog Asset Cache
 
 ```python
-from hyperion.catalog import Catalog
-from hyperion.infrastructure.cache import LocalFileCache
+from pathlib import Path
 
-# Create a catalog with a local file cache
+from hyperion.catalog.catalog import Catalog
+from hyperion.adapters.cache.filesystem import LocalFileCache
+from hyperion.adapters.storage.filesystem import FilesystemStorage
+
+# Asset caching requires a cache to be injected into the Catalog.
+# Catalog.from_config() wires storage from the environment but does NOT
+# configure a cache, so pass `cache=` explicitly to enable caching.
 catalog = Catalog(
-    data_lake_bucket="my-data-lake-bucket",
-    feature_store_bucket="my-feature-store-bucket",
-    persistent_store_bucket="my-persistent-store-bucket",
-    cache=LocalFileCache("catalog", root_path="/tmp/hyperion-cache")
+    storage=FilesystemStorage("/data/lake"),
+    cache=LocalFileCache("catalog", root_path=Path("/tmp/hyperion-cache")),
 )
 
 # Now asset retrievals will be cached
-# First time: downloads from S3
+# First time: reads from storage
 data1 = list(catalog.retrieve_asset(asset1))
 
 # Second time: uses cache
 data1_again = list(catalog.retrieve_asset(asset1))  # Much faster!
 
-# Different asset: downloads from S3
+# Different asset: reads from storage
 data2 = list(catalog.retrieve_asset(asset2))
 
 # Force bypass cache for a specific retrieval
@@ -495,7 +519,8 @@ with catalog._get_asset_file_handle(asset, no_cache=True) as file:
 ### Geo Utilities
 
 ```python
-from hyperion.infrastructure.geo import GoogleMaps, Location
+from hyperion.adapters.geocoder.google import GoogleMaps
+from hyperion.domain.geo import Location
 
 # Initialize Google Maps client
 gmaps = GoogleMaps.from_config()
