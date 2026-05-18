@@ -20,13 +20,17 @@ You can define feature models using either Pydantic (for object-oriented data) o
 
 #### Option A: Pydantic Model
 
-Create a model class that extends both `FeatureModel` and `pydantic.BaseModel`:
+Create a model class that extends both `FeatureModel` and `pydantic.BaseModel`.
+Feature models live in `hyperion.data`, so this requires the `[data]` extra
+(`pip install 'hyperion-sdk[data]'`):
 
 ```python
-from pydantic import BaseModel
-from hyperion.entities.catalog import FeatureModel
-from hyperion.dateutils import TimeResolution
 import datetime
+from typing import ClassVar
+
+from pydantic import BaseModel
+from hyperion.data.asset_schemas import FeatureModel
+from hyperion.dateutils import TimeResolution
 
 class WeatherFeature(FeatureModel, BaseModel):
     asset_name: ClassVar = "weather_data"
@@ -42,10 +46,11 @@ class WeatherFeature(FeatureModel, BaseModel):
 For large datasets or analytics workloads, create a model using `PolarsFeatureModel`:
 
 ```python
+import polars as pl
 import pandera.typing.polars as pt
 from typing import Annotated, ClassVar
 from pandera.engines.polars_engine import DateTime, Float64
-from hyperion.entities.catalog import PolarsFeatureModel
+from hyperion.data.asset_schemas import PolarsFeatureModel
 from hyperion.dateutils import TimeResolution
 
 class WeatherPolarsFeature(PolarsFeatureModel):
