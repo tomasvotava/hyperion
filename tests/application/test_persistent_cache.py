@@ -1,8 +1,9 @@
-"""Tests for `hyperion.infrastructure.cache.PersistentCache`.
+"""Tests for `hyperion.application.persistent_cache.PersistentCache`.
 
-F3 of the DDD refactor deletes `PersistentCache` and replaces it with a
-`KeyValueStore`-backed dict. Before that, lock the load/save lifecycle and the
-on-disk row shape so the replacement can be checked for byte-level parity.
+S7 cut the `Catalog` <-> cache knot: `PersistentCache` moved out of
+`infrastructure.cache` into the application layer and is deprecated in favour of
+an injected `KeyValueStore`. It stays functional for all of 1.x, so its
+load/save lifecycle and on-disk row shape stay locked here.
 """
 
 from collections.abc import Iterable, Iterator
@@ -10,9 +11,9 @@ from typing import Any
 
 import pytest
 
+from hyperion.application.persistent_cache import PersistentCache
 from hyperion.catalog.catalog import AssetNotFoundError, Catalog
 from hyperion.entities.catalog import PersistentStoreAsset
-from hyperion.infrastructure.cache import PersistentCache
 
 
 class FakeCatalog:
@@ -111,7 +112,7 @@ def test_roundtrip_through_catalog(asset: PersistentStoreAsset) -> None:
 
 
 def test_unhashed_key_roundtrip(asset: PersistentStoreAsset) -> None:
-    # GoogleMaps uses hash_keys=False. The key written to storage is the prefixed
+    # GoogleMaps used hash_keys=False. The key written to storage is the prefixed
     # original key, not a hash digest.
     catalog = FakeCatalog()
     cache = PersistentCache("gmaps", hash_keys=False, asset=asset, catalog=catalog)  # type: ignore[arg-type]

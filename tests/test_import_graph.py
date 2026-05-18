@@ -87,6 +87,7 @@ def test_lite_core_module_pulls_no_heavy_deps(module: str) -> None:
         "hyperion.ports.secrets",
         "hyperion.ports.schema_registry",
         "hyperion.ports.storage",
+        "hyperion.ports.geocoder",
     ],
 )
 def test_ports_modules_import(module: str) -> None:
@@ -218,6 +219,10 @@ def test_s6_lite_adapters_pull_no_heavy_deps(module: str) -> None:
         "hyperion.infrastructure.secretsmanager",
         "hyperion.infrastructure.message_queue",
         "hyperion.infrastructure.httputils",
+        # S7 cut the PersistentCache -> Catalog knot: importing the cache shim no
+        # longer drags Catalog / fastavro / boto3 (PersistentCache resolves lazily
+        # to hyperion.application.persistent_cache via __getattr__).
+        "hyperion.infrastructure.cache",
     ],
 )
 def test_pure_shims_pull_no_heavy_deps(module: str) -> None:
@@ -227,13 +232,54 @@ def test_pure_shims_pull_no_heavy_deps(module: str) -> None:
     assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
 
 
-# ``hyperion.infrastructure.cache`` still hosts PersistentCache -> Catalog and
 # ``hyperion.catalog.schema`` touches the eager ``hyperion.catalog`` namespace
-# (-> fastavro), both status quo until S7 / S9 (F8: test_catalog_namespace_lazy
-# is xfail). The S6 contract for these is narrower: the deferred __getattr__
-# must never pull boto3 for the relocated concretes.
+# (-> fastavro), status quo until S9 (F8: test_catalog_namespace_lazy is xfail).
+# The S6 contract here is narrower: the deferred __getattr__ must never pull
+# boto3 for the relocated concretes. (``hyperion.infrastructure.cache`` graduated
+# to the stricter pure-shim guard above once S7 cut the Catalog knot.)
 
 
-@pytest.mark.parametrize("module", ["hyperion.infrastructure.cache", "hyperion.catalog.schema"])
+@pytest.mark.parametrize("module", ["hyperion.catalog.schema"])
 def test_deferred_shims_do_not_pull_boto3(module: str) -> None:
     assert "boto3" not in _heavy_pulled_in(module)
+
+
+# -- S7 (F3 / F4) landed: GoogleMaps moved to hyperion.adapters.geocoder.google
+#    (implements the Geocoder port, takes an injected KeyValueStore -- no more
+#    PersistentCache / Catalog knot). The geocoder port + the static adapter are
+#    lite; the google adapter legitimately imports googlemaps (excluded, like
+#    s3/dynamodb) but must not drag boto3 / the data stack. The deprecated old
+#    geo paths must resolve googlemaps lazily (no pull on shim import). numpy is
+#    carved out: hyperion.domain.geo -> haversine soft-imports it (same carve-out
+#    as test_domain_geo_stays_lite). --
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "hyperion.adapters.geocoder",
+        "hyperion.adapters.geocoder.static",
+        "hyperion.ports.geocoder",
+    ],
+)
+def test_s7_lite_geocoder_pulls_no_heavy_deps(module: str) -> None:
+    forbidden = (HEAVY_MODULES - {"numpy"}) & _heavy_pulled_in(module)
+    assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
+
+
+def test_s7_google_adapter_stays_off_boto3_and_data_stack() -> None:
+    # googlemaps + snappy (via the keyval port) + numpy (via haversine) ride
+    # along legitimately; boto3 / the data stack must not.
+    forbidden = {"boto3", "botocore", "aioboto3", "polars", "pandera", "fastavro"} & _heavy_pulled_in(
+        "hyperion.adapters.geocoder.google"
+    )
+    assert forbidden == set(), f"adapters.geocoder.google unexpectedly imports {sorted(forbidden)}"
+
+
+@pytest.mark.parametrize("module", ["hyperion.infrastructure.geo.gmaps", "hyperion.infrastructure.geo"])
+def test_s7_deprecated_geo_paths_defer_googlemaps(module: str) -> None:
+    # Importing the deprecated shim must not pull googlemaps (resolved lazily via
+    # __getattr__) nor boto3 / the data stack. numpy carve-out: the geo package
+    # __init__ re-exports Location from hyperion.domain.geo -> haversine.
+    forbidden = (HEAVY_MODULES - {"numpy"}) & _heavy_pulled_in(module)
+    assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"

@@ -1,52 +1,23 @@
-"""Tests for `hyperion.infrastructure.geo.gmaps`.
+"""Tests for `hyperion.adapters.geocoder.google`.
 
-The DDD refactor (F3 + F4) deletes `PersistentCache` and replaces it with an
-injected `KeyValueStore` in `GoogleMaps.__init__`. These tests pin:
+S7 (F3 + F4) deleted the `PersistentCache` / `Catalog` knot: `GoogleMaps` now
+takes an injected `KeyValueStore`. These pin:
   - The geocode cache-shape contract (so existing 1.x serialised caches stay readable).
   - The Google Maps API surface (geocode / reverse_geocode / get_altitude) without
     touching the real network.
-  - The singleton + context-manager behaviour.
+  - `from_config()` builds a fresh instance (no singleton) and the no-op CM.
 """
 
 import json
-from collections.abc import Iterable, Iterator
 from typing import Any
 
 import pytest
 
-from hyperion.catalog.catalog import AssetNotFoundError, Catalog
-from hyperion.entities.catalog import PersistentStoreAsset
-from hyperion.infrastructure.cache import PersistentCache
-from hyperion.infrastructure.geo.gmaps import GoogleMaps, _find_info_by_type
-from hyperion.infrastructure.geo.location import Location, NamedLocation
+from hyperion.adapters.geocoder.google import GoogleMaps, _find_info_by_type
+from hyperion.adapters.keyval.memory import InMemoryStore
+from hyperion.domain.geo import Location, NamedLocation
 
 GMAPS_API_KEY_ENV = "HYPERION_GEO_GMAPS_API_KEY"  # pragma: allowlist secret
-
-
-class FakeCatalog:
-    """An in-memory catalog that implements just enough surface for PersistentCache."""
-
-    def __init__(self) -> None:
-        self.stored: dict[str, list[dict[str, Any]]] = {}
-        self.store_calls = 0
-        self.retrieve_calls = 0
-
-    def retrieve_asset(self, asset: PersistentStoreAsset) -> Iterator[dict[str, Any]]:
-        self.retrieve_calls += 1
-        key = asset.get_path()
-        if key not in self.stored:
-            raise AssetNotFoundError(asset)
-        yield from self.stored[key]
-
-    def store_asset(
-        self,
-        asset: PersistentStoreAsset,
-        data: Iterable[dict[str, Any]],
-        notify: bool = True,
-        schema_path: str | None = None,
-    ) -> None:
-        self.store_calls += 1
-        self.stored[asset.get_path()] = list(data)
 
 
 class FakeGmapsClient:
@@ -79,33 +50,16 @@ class FakeGmapsClient:
         return self.elevation_results
 
 
-@pytest.fixture(autouse=True)
-def _reset_singleton() -> Iterator[None]:
-    previous = GoogleMaps._instance
-    GoogleMaps._instance = None
-    yield
-    GoogleMaps._instance = previous
-
-
-@pytest.fixture
-def fake_catalog(monkeypatch: pytest.MonkeyPatch) -> FakeCatalog:
-    catalog = FakeCatalog()
-    monkeypatch.setattr(Catalog, "from_config", classmethod(lambda cls: catalog))
-    return catalog
-
-
-def _build_gmaps(client: FakeGmapsClient) -> GoogleMaps:
+def _build_gmaps(client: FakeGmapsClient, keyval: InMemoryStore | None = None) -> GoogleMaps:
+    """Construct a GoogleMaps without invoking the real googlemaps.Client."""
     gmaps = GoogleMaps.__new__(GoogleMaps)
-    gmaps.geocode_cache = PersistentCache(
-        "gmaps", hash_keys=False, asset=PersistentStoreAsset("GEOCodeCache", schema_version=1)
-    )
     gmaps.client = client
-    gmaps._cache_context = None
+    gmaps.keyval = keyval if keyval is not None else InMemoryStore()
     return gmaps
 
 
 class TestGeocode:
-    def test_cache_miss_calls_client_and_stores(self, fake_catalog: FakeCatalog) -> None:
+    def test_cache_miss_calls_client_and_stores(self) -> None:
         client = FakeGmapsClient(
             geocode_results=[
                 {
@@ -115,36 +69,33 @@ class TestGeocode:
             ]
         )
         gmaps = _build_gmaps(client)
-        with gmaps:
-            location = gmaps.geocode("Paris")
+        location = gmaps.geocode("Paris")
         assert isinstance(location, Location)
         assert location.latitude == pytest.approx(48.8566)
         assert location.longitude == pytest.approx(2.3522)
         assert location.title == "Paris"
         assert location.address == "Paris, France"
         assert client.geocode_calls == ["Paris"]
+        # The result was written through to the injected store.
+        assert gmaps.keyval.get("Paris") is not None
 
-    def test_cache_hit_avoids_client_call(self, fake_catalog: FakeCatalog) -> None:
-        # Pre-populate the catalog so __enter__ loads the cache with our payload.
-        # PersistentCache is constructed with prefix="gmaps", hash_keys=False, so the
-        # internal cache key includes the prefix.
+    def test_cache_hit_avoids_client_call(self) -> None:
         cached_location = Location(latitude=1.0, longitude=2.0, title="Cached", address="Cached addr")
-        fake_catalog.stored[PersistentStoreAsset("GEOCodeCache", schema_version=1).get_path()] = [
-            {
-                "key": "gmaps:Cached",
-                "value": json.dumps({"latitude": 1.0, "longitude": 2.0, "title": "Cached", "address": "Cached addr"}),
-            }
-        ]
+        keyval = InMemoryStore()
+        keyval.set(
+            "Cached",
+            json.dumps({"latitude": 1.0, "longitude": 2.0, "title": "Cached", "address": "Cached addr"}),
+        )
         client = FakeGmapsClient()  # any client call would fail (empty response → ValueError)
-        gmaps = _build_gmaps(client)
-        with gmaps:
-            result = gmaps.geocode("Cached")
+        gmaps = _build_gmaps(client, keyval=keyval)
+        result = gmaps.geocode("Cached")
         assert result == cached_location
         assert client.geocode_calls == []
 
-    def test_cached_json_shape(self, fake_catalog: FakeCatalog) -> None:
+    def test_cached_json_shape(self) -> None:
         # The persisted JSON keys define the on-disk format for downstream consumers.
-        # Post-refactor, the new KeyValueStore-backed cache must persist the same shape.
+        # The KeyValueStore-backed cache must persist the same shape as the old
+        # PersistentCache so existing 1.x serialised caches stay readable.
         client = FakeGmapsClient(
             geocode_results=[
                 {
@@ -154,26 +105,23 @@ class TestGeocode:
             ]
         )
         gmaps = _build_gmaps(client)
-        with gmaps:
-            gmaps.geocode("origin")
-        rows = fake_catalog.stored[PersistentStoreAsset("GEOCodeCache", schema_version=1).get_path()]
-        assert len(rows) == 1
-        # Internal cache key is prefixed; the lookup address was "origin".
-        assert rows[0]["key"] == "gmaps:origin"
-        payload = json.loads(rows[0]["value"])
+        gmaps.geocode("origin")
+        raw = gmaps.keyval.get("origin")
+        assert raw is not None
+        payload = json.loads(raw)
         assert set(payload.keys()) == {"latitude", "longitude", "title", "address"}
         assert payload["title"] == "origin"
         assert payload["address"] == "Null Island"
 
-    def test_empty_result_raises(self, fake_catalog: FakeCatalog) -> None:
+    def test_empty_result_raises(self) -> None:
         client = FakeGmapsClient(geocode_results=[])
         gmaps = _build_gmaps(client)
-        with gmaps, pytest.raises(ValueError, match="Could not geocode address"):
+        with pytest.raises(ValueError, match="Could not geocode address"):
             gmaps.geocode("nowhere")
 
 
 class TestReverseGeocode:
-    def test_extracts_address_components(self, fake_catalog: FakeCatalog) -> None:
+    def test_extracts_address_components(self) -> None:
         client = FakeGmapsClient(
             reverse_results=[
                 {
@@ -211,13 +159,13 @@ class TestReverseGeocode:
         # title is set to the route name
         assert named.location.title == "Downing Street"
 
-    def test_passes_language(self, fake_catalog: FakeCatalog) -> None:
+    def test_passes_language(self) -> None:
         client = FakeGmapsClient(reverse_results=[{"formatted_address": "Some Address", "address_components": []}])
         gmaps = _build_gmaps(client)
         gmaps.reverse_geocode(Location(0.0, 0.0), language="de")
         assert client.reverse_calls == [({"lat": 0.0, "lng": 0.0}, "de")]
 
-    def test_empty_results_raises(self, fake_catalog: FakeCatalog) -> None:
+    def test_empty_results_raises(self) -> None:
         client = FakeGmapsClient(reverse_results=[])
         gmaps = _build_gmaps(client)
         with pytest.raises(ValueError, match="no results"):
@@ -225,12 +173,12 @@ class TestReverseGeocode:
 
 
 class TestGetAltitude:
-    def test_returns_float(self, fake_catalog: FakeCatalog) -> None:
+    def test_returns_float(self) -> None:
         client = FakeGmapsClient(elevation_results=[{"elevation": 123.45}])
         gmaps = _build_gmaps(client)
         assert gmaps.get_altitude(Location(0.0, 0.0)) == pytest.approx(123.45)
 
-    def test_empty_raises(self, fake_catalog: FakeCatalog) -> None:
+    def test_empty_raises(self) -> None:
         client = FakeGmapsClient(elevation_results=[])
         gmaps = _build_gmaps(client)
         with pytest.raises(ValueError, match="No elevation data"):
@@ -243,30 +191,30 @@ class TestFromConfig:
         with pytest.raises(ValueError, match="Google Maps API key is not set"):
             GoogleMaps.from_config()
 
-    def test_singleton(self, monkeypatch: pytest.MonkeyPatch, fake_catalog: FakeCatalog) -> None:
-        # googlemaps.Client validates the key prefix; use a syntactically valid one.
-        monkeypatch.setenv(GMAPS_API_KEY_ENV, "AIzaTestKeyForSingletonCheck")
+    def test_returns_fresh_instance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # No more singleton: every from_config() call builds a new instance,
+        # each with its own (default InMemoryStore) cache.
+        monkeypatch.setenv(GMAPS_API_KEY_ENV, "AIzaTestKeyForFromConfigCheck")
         first = GoogleMaps.from_config()
         second = GoogleMaps.from_config()
-        assert first is second
+        assert first is not second
+        assert isinstance(first.keyval, InMemoryStore)
+        assert first.keyval is not second.keyval
 
 
 class TestContextManager:
-    def test_exit_flushes_cache_to_catalog(self, fake_catalog: FakeCatalog) -> None:
+    def test_enter_returns_self(self) -> None:
+        gmaps = _build_gmaps(FakeGmapsClient())
+        with gmaps as entered:
+            assert entered is gmaps
+
+    def test_exit_is_noop(self) -> None:
         client = FakeGmapsClient(
             geocode_results=[{"geometry": {"location": {"lat": 0.0, "lng": 0.0}}, "formatted_address": "x"}]
         )
         gmaps = _build_gmaps(client)
-        before = fake_catalog.store_calls
-        with gmaps:
-            gmaps.geocode("x")
-        # __exit__ on the PersistentCache calls store_asset exactly once.
-        assert fake_catalog.store_calls == before + 1
-
-    def test_exit_without_enter_is_noop(self, fake_catalog: FakeCatalog) -> None:
-        client = FakeGmapsClient()
-        gmaps = _build_gmaps(client)
-        # Never entered; exit must not raise even though cache_context is None.
+        # No context manager required: geocoding works and __exit__ never raises.
+        gmaps.geocode("x")
         gmaps.__exit__(None, None, None)
 
 
