@@ -1,5 +1,195 @@
 # Changelog
 
+## Upgrade guide — DDD ports/adapters refactor
+
+The next major release finishes the ports/adapters (DDD) layout. It is a
+**structural** refactor — no features added, no behaviour changed (one bug
+fixed, see below). Every relocated symbol stays importable from its old path
+for the whole 1.x line behind a `DeprecationWarning`; the old paths are removed
+in 2.0. The single non-additive break is the `Catalog` constructor, mitigated
+by `Catalog.from_config()`.
+
+This guide is the migration reference for downstream consumers. It is
+pinned above the generated release history on purpose and applies as of the
+first 1.x release.
+
+### Packaging: lite core + opt-in extras
+
+`pip install hyperion-sdk` becomes a slim lite core. Heavy backends are opt-in
+extras. Install the extras for the capabilities you use:
+
+Lite core (always installed): `loguru`, `pydantic`, `httpx`,
+`python-dateutil`, `python-dotenv`, `env-proxy`, `cachetools`, `click`,
+`haversine`, `aws-lambda-typing`.
+
+| Extra | Pulls | Enables |
+|---|---|---|
+| `[aws]` | `boto3`, `aioboto3` | every `adapters/*/dynamodb`, `s3`, `sqs`, `aws_sm` (DynamoDB cache/keyval, S3 storage/schema, SQS queue, AWS Secrets Manager) |
+| `[data]` | `polars`, `pandera`, `numpy` | `hyperion.data.*` (pandera↔polars typing, asset schemas, `SpatialKMeans`) |
+| `[catalog]` | `fastavro` | `hyperion.adapters.serialization.avro` (avro-backed `Catalog`) |
+| `[geo]` | `googlemaps` | `hyperion.adapters.geocoder.google` (`GoogleMaps`); Haversine math stays lite |
+| `[snappy]` | `python-snappy` | compressed filesystem cache / DynamoDB keyval (graceful no-compression fallback when absent) |
+| `[all]` | union of the above | parity with the pre-refactor full install |
+
+`[catalog]` no longer transitively requires `[aws]`: a `Catalog` backed by
+local filesystem storage works with `[catalog]` alone.
+
+Downstream `sed`/pin guidance: a consumer that used `Catalog`/avro now needs
+`hyperion-sdk[catalog]`; one that used DynamoDB/S3/SQS needs `[aws]`; one that
+used the pandera/polars helpers needs `[data]`; `[all]` reproduces today's
+install exactly.
+
+> The packaging change ships with the next major release. Until that release
+> is published, the default install still pulls every dependency — pin the
+> extras now so the upgrade is a no-op.
+
+### Import path changes (deprecated; removed in the next major)
+
+Every symbol below keeps working from its old path through all of 1.x (with a
+`DeprecationWarning` naming the new path) and resolves to the *same* object as
+the new path. 58 symbols across 12 modules moved. Migrate by rewriting the
+import module — the symbol names are unchanged.
+
+| Old import path | Symbols (names unchanged) | New import path |
+|---|---|---|
+| `hyperion.infrastructure.cache` | `Cache`, `CacheStats`, `CachingError` | `hyperion.ports.cache` |
+| `hyperion.infrastructure.cache` | `InMemoryCache` | `hyperion.adapters.cache.memory` |
+| `hyperion.infrastructure.cache` | `LocalFileCache`, `DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE` | `hyperion.adapters.cache.filesystem` |
+| `hyperion.infrastructure.cache` | `DynamoDBCache`, `DYNAMODB_MAX_LENGTH` | `hyperion.adapters.cache.dynamodb` |
+| `hyperion.infrastructure.cache` | `PersistentCache` | `hyperion.application.persistent_cache` |
+| `hyperion.infrastructure.keyval` | `KeyValueStore`, `CompressionType`, `is_valid_compression_type` | `hyperion.ports.keyval` |
+| `hyperion.infrastructure.keyval` | `InMemoryStore` | `hyperion.adapters.keyval.memory` |
+| `hyperion.infrastructure.keyval` | `DynamoDBStore` | `hyperion.adapters.keyval.dynamodb` |
+| `hyperion.infrastructure.message_queue` | `Queue` | `hyperion.ports.queue` |
+| `hyperion.infrastructure.message_queue` | `Message`, `ArrivalEvent`, `DataLakeArrivalMessage`, `SourceBackfillMessage`, `SerializedMessage`, `iter_messages_from_sqs_event`, `create_backfill_event` | `hyperion.domain.messages` |
+| `hyperion.infrastructure.message_queue` | `InMemoryQueue` | `hyperion.adapters.queue.memory` |
+| `hyperion.infrastructure.message_queue` | `FileQueue` | `hyperion.adapters.queue.filesystem` |
+| `hyperion.infrastructure.message_queue` | `SQSQueue` | `hyperion.adapters.queue.sqs` |
+| `hyperion.infrastructure.secretsmanager` | `SecretsManager`, `SECRET_PATTERN` | `hyperion.ports.secrets` |
+| `hyperion.infrastructure.secretsmanager` | `DummySecretsManager` | `hyperion.adapters.secrets.dummy` |
+| `hyperion.infrastructure.secretsmanager` | `AWSSecretsManager` | `hyperion.adapters.secrets.aws_sm` |
+| `hyperion.infrastructure.httputils` | `redact_url`, `get_proxy_mounts` | `hyperion.adapters.http.proxy` |
+| `hyperion.infrastructure.geo.gmaps` | `GoogleMaps` | `hyperion.adapters.geocoder.google` |
+| `hyperion.infrastructure.geo` | `GoogleMaps` | `hyperion.adapters.geocoder.google` |
+| `hyperion.infrastructure.geo.location` | `Location`, `NamedLocation`, `SpatialKMeans`, `LATITUDE_DEGREE_TO_METERS`, `EARTH_RADIUS_METERS`, `meters_to_degrees` | `hyperion.domain.geo` |
+| `hyperion.catalog.schema` | `SchemaStore` | `hyperion.ports.schema_registry` |
+| `hyperion.catalog.schema` | `AVRO_SCHEMAS_PATH`, `LocalSchemaStore` | `hyperion.adapters.schema_registry.local` |
+| `hyperion.catalog.schema` | `S3SchemaStore` | `hyperion.adapters.schema_registry.s3` |
+| `hyperion.catalog` | `SchemaStore` | `hyperion.ports.schema_registry` |
+| `hyperion.catalog` | `Catalog`, `AssetNotFoundError` | `hyperion.catalog.catalog` |
+| `hyperion.typeutils` | `PANDERA_TO_POLARS_MAPPING`, `POLARS_SCHEMA_COPY_ATTRIBUTES`, `PolarsUTCDateTime`, `map_pandera_dtype_to_polars` | `hyperion.data.typeutils` |
+| `hyperion.entities.catalog` | `AssetType`, `AssetProtocol`, `get_prefixed_path`, `DataLakeAsset`, `PersistentStoreAsset`, `FeatureAsset` | `hyperion.domain.assets` |
+| `hyperion.entities.catalog` | `FeatureModel`, `PolarsFeatureModel` | `hyperion.data.asset_schemas` |
+
+Stayed put — do not migrate these: the lite core (`hyperion.log`,
+`hyperion.config`, `hyperion.dateutils`, `hyperion.asyncutils`) is unchanged,
+and `hyperion.typeutils` keeps its stdlib helpers (e.g. `DateOrDelta`,
+`assert_type`, `dataclass_asdict`, `is_typed_dict_instance`). Only the
+pandera/polars names listed above left `hyperion.typeutils`.
+
+### Catalog constructor change (the one hard break)
+
+`Catalog.__init__` is the single non-additive break — there is no compat shim
+for it. The old bucket/prefix keyword arguments, the `StoreBucketConfig`
+TypedDict, the `Catalog.s3_client` property and `get_store_config()` are
+removed.
+
+Old (removed):
+
+```python
+Catalog(
+    data_lake_bucket=...,
+    feature_store_bucket=...,
+    persistent_store_bucket=...,
+    data_lake_prefix="",
+    feature_store_prefix="",
+    persistent_store_prefix="",
+    queue=None,
+    cache=None,
+    schema_store=None,
+)
+```
+
+New:
+
+```python
+from hyperion.ports.storage import StoragePort
+
+Catalog(
+    storage=...,            # StoragePort, or Mapping[AssetType, StoragePort]
+    queue=None,
+    cache=None,
+    schema_store=None,
+    serializer=None,        # AvroSerializer; defaults to a fresh one
+)
+```
+
+A single `StoragePort` serves every asset type; pass a mapping keyed by
+`"data_lake"` / `"feature"` / `"persistent_store"` to route each type to a
+different backend. Bucket and prefix configuration now lives inside the
+`S3Storage` adapter, not on `Catalog`.
+
+Escape hatch: `Catalog.from_config()` is unchanged in name and behaviour
+intent — it reads the same environment configuration and builds one
+`S3Storage` per asset type, reproducing the pre-refactor on-S3 key layout.
+Callers that used the old keyword arguments only to mirror the environment
+config should switch to `Catalog.from_config()` and need no further changes.
+
+New capability unlocked by the inversion (not a new API): a `Catalog` can now
+run against local disk without AWS —
+`Catalog(storage=FilesystemStorage("/data"), schema_store=LocalSchemaStore("/schemas"))`
+with only `hyperion-sdk[catalog]`.
+
+Bug fixed by this change (behaviour change, called out deliberately):
+pre-refactor `Catalog.from_config()` wired the **feature store** with the
+**data-lake** prefix (`feature_store_prefix=storage_config.data_lake_prefix`).
+It now correctly uses `feature_store_prefix`. In environments where the data
+lake and feature store prefixes differ, feature-store asset keys resolve to a
+different (correct) S3 path after upgrading. This is a fix, not a regression —
+review any tooling that depended on the old, wrong path.
+
+### Deprecation & removal policy
+
+- Every old import path above is deprecated as of the first 1.x release and
+  remains functional for the entire 1.x line.
+- Accessing a relocated symbol from its old path emits a
+  `DeprecationWarning` that names the new path and states it will be removed
+  in `hyperion-sdk` 2.0.
+- The old paths, the `Catalog.from_config()` compatibility default, and the
+  removed `Catalog` constructor surface are deleted in 2.0. There will be at
+  least one minor release of warnings before any removal.
+- `PersistentCache` is relocated to `hyperion.application.persistent_cache`
+  and remains functional through 1.x; it is superseded by injecting a
+  `KeyValueStore` and is removed in 2.0.
+
+### Downstream consumers
+
+These steps apply to every consumer of `hyperion-sdk`; none is specific to any
+one project. Work through them in order:
+
+- **Relax the version pin.** Any pin that excludes the new major (for example
+  `hyperion-sdk>=0.15.0,<1`) must be widened to admit it.
+- **Request the extras you use.** The default install is now a lite core (see
+  *Packaging* above). A consumer that uses `Catalog`/avro needs
+  `hyperion-sdk[catalog]`; DynamoDB/S3/SQS needs `[aws]`; the pandera/polars
+  helpers need `[data]`; Google geocoding needs `[geo]`. `[all]` reproduces the
+  pre-refactor install exactly.
+- **Rewrite moved imports.** Apply the *Import path changes* table above; only
+  the import module changes, symbol names are unchanged. Old paths keep working
+  through the whole 1.x line but emit a `DeprecationWarning` naming the new
+  path — run your test suite with deprecation warnings visible to surface every
+  call site mechanically.
+- **Check direct `Catalog(...)` construction.** This is the only hard break.
+  Code that instantiates `Catalog` with the old `*_bucket`/`*_prefix` keyword
+  arguments must switch to `Catalog.from_config()` (unchanged in name and
+  intent — it rebuilds the per-bucket S3 layout from the environment) or to the
+  new `storage=` constructor. Consumers that only ever used
+  `Catalog.from_config()` need no constructor change.
+- **Account for the `from_config()` prefix fix.** Consumers that rely on
+  `Catalog.from_config()` and whose data-lake and feature-store prefixes differ
+  will see feature-store asset keys resolve to the corrected path (see *Catalog
+  constructor change* above). Review any tooling that depended on the old path.
+
 ## 0.15.1 (2026-05-12)
 
 ### Fix
