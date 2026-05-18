@@ -207,15 +207,11 @@ def test_lite_storage_adapters_pull_no_heavy_deps(module: str) -> None:
     assert hits == set(), f"{module} unexpectedly imports {sorted(hits)}"
 
 
-# -- This module currently violates the promise; the refactor fixes it --
-# `strict=True` means the marker fails CI as soon as the test starts passing —
-# forcing the marker to be removed when the corresponding refactor step lands.
+# -- S9 (F8) landed: hyperion/catalog/__init__.py is now a lazy two-map shim;
+#    touching the namespace pulls neither fastavro nor boto3 (Catalog /
+#    AssetNotFoundError resolve lazily via __getattr__). --
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Refactor F8 / Step 9: hyperion.catalog namespace must not eagerly load fastavro/boto3.",
-)
 def test_catalog_namespace_lazy() -> None:
     assert _heavy_pulled_in("hyperion.catalog") == set()
 
@@ -278,11 +274,12 @@ def test_pure_shims_pull_no_heavy_deps(module: str) -> None:
     assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
 
 
-# ``hyperion.catalog.schema`` touches the eager ``hyperion.catalog`` namespace
-# (-> fastavro), status quo until S9 (F8: test_catalog_namespace_lazy is xfail).
-# The S6 contract here is narrower: the deferred __getattr__ must never pull
-# boto3 for the relocated concretes. (``hyperion.infrastructure.cache`` graduated
-# to the stricter pure-shim guard above once S7 cut the Catalog knot.)
+# ``hyperion.catalog.schema`` is a deferred shim; the S6 contract asserted here
+# is narrowly that its __getattr__ must never pull boto3 for the relocated
+# concretes. (Since S9 made the ``hyperion.catalog`` namespace lazy, importing
+# this shim no longer drags fastavro either -- the stronger no-heavy guarantee
+# is covered by ``test_catalog_namespace_lazy`` above. ``hyperion.infrastructure
+# .cache`` graduated to the stricter pure-shim guard once S7 cut the Catalog knot.)
 
 
 @pytest.mark.parametrize("module", ["hyperion.catalog.schema"])

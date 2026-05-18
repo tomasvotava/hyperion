@@ -12,7 +12,7 @@ import pandera.typing.polars
 import polars
 
 from hyperion.asyncutils import iter_async
-from hyperion.catalog import Catalog
+from hyperion.catalog.catalog import Catalog
 from hyperion.data.asset_schemas import FeatureModel, PolarsFeatureModel
 from hyperion.dateutils import TimeResolution, utcnow
 from hyperion.domain.assets import FeatureAsset

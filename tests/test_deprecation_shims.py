@@ -1,7 +1,8 @@
-"""S6 + S7 backward-compatibility contract.
+"""S6 + S7 + S9 backward-compatibility contract.
 
-Every symbol relocated by the ports/adapters split (F7 / Step 6) and the
-geocoder/PersistentCache inversion (F3 / F4 / Step 7) must stay importable from
+Every symbol relocated by the ports/adapters split (F7 / Step 6), the
+geocoder/PersistentCache inversion (F3 / F4 / Step 7), and the
+``hyperion.catalog`` namespace lazy shim (F8 / Step 9) must stay importable from
 its old path for the whole ``hyperion-sdk`` 1.x line, emit a
 :class:`DeprecationWarning` pointing at the new location, and resolve to the
 *same* object as the new path. ``PersistentCache`` is now relocated (S7) to
@@ -67,6 +68,10 @@ RELOCATIONS = [
     ("hyperion.infrastructure.geo.gmaps", "GoogleMaps", "hyperion.adapters.geocoder.google"),
     ("hyperion.infrastructure.geo", "GoogleMaps", "hyperion.adapters.geocoder.google"),
     ("hyperion.infrastructure.cache", "PersistentCache", "hyperion.application.persistent_cache"),
+    # S9: hyperion.catalog namespace lazy shim
+    ("hyperion.catalog", "Catalog", "hyperion.catalog.catalog"),
+    ("hyperion.catalog", "AssetNotFoundError", "hyperion.catalog.catalog"),
+    ("hyperion.catalog", "SchemaStore", "hyperion.ports.schema_registry"),
 ]
 
 
