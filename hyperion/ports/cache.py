@@ -3,8 +3,8 @@
 Abstract :class:`Cache` base plus its contract types (:class:`CacheStats`,
 :class:`CachingError`). Concrete adapters (``InMemoryCache``, ``LocalFileCache``,
 ``DynamoDBCache``) live in ``hyperion.adapters.cache.*``; ``Cache.from_config``
-reaches them via a deferred import. ``PersistentCache`` still lives in
-``hyperion.infrastructure.cache`` until step S7.
+reaches them via a deferred import. The deprecated ``PersistentCache`` (the
+``Catalog`` knot, S7) moved to :mod:`hyperion.application.persistent_cache`.
 """
 
 import hashlib

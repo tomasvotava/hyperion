@@ -1,10 +1,12 @@
-"""S6 backward-compatibility contract.
+"""S6 + S7 backward-compatibility contract.
 
-Every symbol relocated by the ports/adapters split (F7 / Step 6) must stay
-importable from its old path for the whole ``hyperion-sdk`` 1.x line, emit a
+Every symbol relocated by the ports/adapters split (F7 / Step 6) and the
+geocoder/PersistentCache inversion (F3 / F4 / Step 7) must stay importable from
+its old path for the whole ``hyperion-sdk`` 1.x line, emit a
 :class:`DeprecationWarning` pointing at the new location, and resolve to the
-*same* object as the new path. ``PersistentCache`` is deliberately excluded --
-it is not relocated in S6 (the ``Catalog`` knot removed in S7).
+*same* object as the new path. ``PersistentCache`` is now relocated (S7) to
+:mod:`hyperion.application.persistent_cache` and deprecated in favour of an
+injected ``KeyValueStore``; it is functional through 1.x and removed in 2.0.
 """
 
 import importlib
@@ -61,6 +63,10 @@ RELOCATIONS = [
     ("hyperion.catalog.schema", "AVRO_SCHEMAS_PATH", "hyperion.adapters.schema_registry.local"),
     ("hyperion.catalog.schema", "LocalSchemaStore", "hyperion.adapters.schema_registry.local"),
     ("hyperion.catalog.schema", "S3SchemaStore", "hyperion.adapters.schema_registry.s3"),
+    # S7: geocoder + PersistentCache knot
+    ("hyperion.infrastructure.geo.gmaps", "GoogleMaps", "hyperion.adapters.geocoder.google"),
+    ("hyperion.infrastructure.geo", "GoogleMaps", "hyperion.adapters.geocoder.google"),
+    ("hyperion.infrastructure.cache", "PersistentCache", "hyperion.application.persistent_cache"),
 ]
 
 
@@ -73,16 +79,6 @@ def test_old_path_warns_and_resolves_to_new_object(old_module: str, attr: str, n
         old_obj = getattr(old_mod, attr)
 
     assert old_obj is new_obj
-
-
-def test_persistent_cache_not_deprecated() -> None:
-    import warnings
-
-    from hyperion.infrastructure import cache
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", DeprecationWarning)
-        assert cache.PersistentCache is cache.PersistentCache
 
 
 def test_unknown_attribute_still_raises_attribute_error() -> None:
