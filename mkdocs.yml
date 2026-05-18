@@ -1,0 +1,112 @@
+site_name: Hyperion
+site_description: A headless ETL / ELT / data pipeline and integration SDK for Python.
+site_url: https://tomasvotava.github.io/hyperion/
+repo_url: https://github.com/tomasvotava/hyperion
+repo_name: tomasvotava/hyperion
+edit_uri: edit/master/docs/
+copyright: Copyright &copy; Tomas Votava
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      base_path:
+        - .
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - .
+          options:
+            docstring_style: google
+            docstring_section_style: table
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            filters:
+              - "!^_"
+
+exclude_docs: |
+  ddd-refactor-plan.md
+  gen_ref_pages.py
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - tutorials/index.md
+      - First DataLakeAsset: tutorials/first-datalake-asset.md
+      - Building a custom Source: tutorials/custom-source.md
+  - How-to guides:
+      - how-to/index.md
+      - Install Hyperion and pick extras: how-to/install-and-extras.md
+      - Configure backends via environment: how-to/configure-via-environment.md
+      - Work with FeatureAssets: how-to/feature-assets.md
+      - Work with PersistentStoreAssets: how-to/persistent-store-assets.md
+      - Use a cached Catalog: how-to/cached-catalog.md
+      - Fetch data with Asset Collections: how-to/asset-collections.md
+      - Register and use schemas: how-to/schemas.md
+      - Repartition data: how-to/repartition-data.md
+      - Use the geo utilities: how-to/geo-utilities.md
+      - Run a Source: how-to/run-a-source.md
+  - Reference: reference/
+  - Explanation:
+      - explanation/index.md
+      - Architecture: explanation/architecture.md
+      - Assets and the Catalog: explanation/assets-and-catalog.md
+      - Ports and adapters: explanation/ports-and-adapters.md
+      - Lite core and extras: explanation/extras-and-lite-core.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/tomasvotava/hyperion

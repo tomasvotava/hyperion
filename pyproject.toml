@@ -7,6 +7,12 @@ readme = "README.md"
 license = "MIT"
 packages = [{ include = "hyperion" }]
 
+[tool.poetry.urls]
+Homepage = "https://github.com/tomasvotava/hyperion"
+Documentation = "https://tomasvotava.github.io/hyperion/"
+Repository = "https://github.com/tomasvotava/hyperion"
+Changelog = "https://github.com/tomasvotava/hyperion/blob/master/CHANGELOG.md"
+
 [tool.poetry.dependencies]
 python = ">=3.11,<3.15"
 
@@ -56,6 +62,20 @@ commitizen = "^4.4.1"
 mypy-boto3 = "^1.38.0"
 mypy-boto3-s3 = "^1.38.0"
 import-linter = ">=2.0,<3"
+
+# Docs toolchain. Optional so the default install, `--all-extras`, and the
+# `install-all` composite stay untouched; pulled only with `poetry install
+# --with docs` (locally and in .github/workflows/docs.yml).
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = ">=1.6,<2"
+mkdocs-material = ">=9.5,<10"
+mkdocstrings = { extras = ["python"], version = ">=0.27,<0.31" }
+mkdocs-gen-files = ">=0.5,<0.6"
+mkdocs-literate-nav = ">=0.6,<0.7"
+mkdocs-section-index = ">=0.3,<0.4"
 
 [build-system]
 requires = ["poetry-core"]
