@@ -266,9 +266,7 @@ class TestQueueFromConfig:
         second = Queue.from_config()
         assert first is second
 
-    def test_cached_inconsistent_with_config_raises(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_cached_inconsistent_with_config_raises(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         # First call resolves to InMemoryQueue.
         first = Queue.from_config()
         assert isinstance(first, InMemoryQueue)
@@ -301,9 +299,7 @@ class TestSQSEventHelpers:
             list(iter_messages_from_sqs_event(not_an_event))
 
     def test_create_backfill_event_roundtrip(self) -> None:
-        message = SourceBackfillMessage(
-            source="my-source", start_date=datetime.datetime(2025, 1, 1, tzinfo=UTC)
-        )
+        message = SourceBackfillMessage(source="my-source", start_date=datetime.datetime(2025, 1, 1, tzinfo=UTC))
         event = create_backfill_event(message, message_id="m-id", receipt_handle="r-id")
         assert event["Records"][0]["messageAttributes"]["MessageType"]["stringValue"] == "SourceBackfillMessage"
         restored = list(iter_messages_from_sqs_event(event))

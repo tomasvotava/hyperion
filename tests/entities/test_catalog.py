@@ -145,16 +145,11 @@ class TestFeatureAsset:
             partition_keys={"region": "eu", "asset_class": "energy"},
         )
         path = asset.get_path()
-        assert path == (
-            "foo.1d/asset_class=energy/region=eu/partition_date=2025-01-02T00:00:00+00:00/v1.avro"
-        )
+        assert path == ("foo.1d/asset_class=energy/region=eu/partition_date=2025-01-02T00:00:00+00:00/v1.avro")
 
     def test_get_path_with_prefix(self) -> None:
         asset = FeatureAsset("foo", datetime.datetime(2025, 1, 2, tzinfo=UTC), "1d")
-        assert (
-            asset.get_path("features")
-            == "features/foo.1d/partition_date=2025-01-02T00:00:00+00:00/v1.avro"
-        )
+        assert asset.get_path("features") == "features/foo.1d/partition_date=2025-01-02T00:00:00+00:00/v1.avro"
 
     def test_get_path_higher_version(self) -> None:
         asset = FeatureAsset("foo", datetime.datetime(2025, 1, 2, tzinfo=UTC), "1d", schema_version=4)

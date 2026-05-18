@@ -3,8 +3,8 @@
 Abstract :class:`SecretsManager` base and the :data:`SECRET_PATTERN` used by
 ``translate_env_vars``. Concrete adapters (``DummySecretsManager``,
 ``AWSSecretsManager``, ``EnvSecretsManager``) live in
-``hyperion.adapters.secrets.*``; ``_create_new`` reaches them via a deferred
-import.
+``hyperion.adapters.secrets.*``; ``_create_new`` delegates backend selection to
+:mod:`hyperion.composition` (the single composition root).
 """
 
 import abc
@@ -23,17 +23,9 @@ class SecretsManager(abc.ABC):
 
     @staticmethod
     def _create_new() -> "SecretsManager":
-        from hyperion.adapters.secrets.aws_sm import AWSSecretsManager
-        from hyperion.adapters.secrets.dummy import DummySecretsManager
-        from hyperion.config import secrets_config
+        from hyperion import composition
 
-        if secrets_config.backend is None:
-            logger.warning("No secrets backend is configured. Using dummy secrets manager.")
-            return DummySecretsManager()
-        if secrets_config.backend == "AWSSecretsManager":
-            logger.info("Using AWS Secrets Manager.")
-            return AWSSecretsManager()
-        raise ValueError(f"Unsupported secrets backend: {secrets_config.backend!r}.")
+        return composition.default_secrets()
 
     @staticmethod
     def from_config() -> "SecretsManager":

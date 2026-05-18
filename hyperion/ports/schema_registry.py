@@ -2,25 +2,21 @@
 
 Abstract :class:`SchemaStore` base. Concrete adapters (``LocalSchemaStore``,
 ``S3SchemaStore``) live in ``hyperion.adapters.schema_registry.*``;
-``_create_new`` reaches them via a deferred import. ``AssetProtocol`` /
-``AssetType`` are referenced only in annotations, so this port stays free of
-the pandera/polars data stack.
+``_create_new`` delegates backend selection to :mod:`hyperion.composition`
+(the single composition root). ``AssetProtocol`` / ``AssetType`` are
+referenced only in annotations, so this port stays free of the pandera/polars
+data stack.
 """
 
 from __future__ import annotations
 
 import abc
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
-from urllib.parse import urlparse
 
 from hyperion.config import storage_config
-from hyperion.log import get_logger
 
 if TYPE_CHECKING:
     from hyperion.domain.assets import AssetProtocol, AssetType
-
-logger = get_logger("schema-store")
 
 
 class SchemaStore(abc.ABC):
@@ -64,21 +60,9 @@ class SchemaStore(abc.ABC):
 
     @staticmethod
     def _create_new(path: str) -> SchemaStore:
-        from hyperion.adapters.schema_registry.local import LocalSchemaStore
-        from hyperion.adapters.schema_registry.s3 import S3SchemaStore
+        from hyperion import composition
 
-        parsed = urlparse(path)
-        if parsed.scheme == "file" or not parsed.scheme:
-            resolved = (Path(parsed.netloc or "/") / parsed.path.lstrip("/")).resolve()
-            logger.info("Using file schema store.", path=resolved.as_posix())
-            return LocalSchemaStore(resolved)
-        if parsed.scheme == "s3":
-            bucket = parsed.netloc
-            prefix = parsed.path.lstrip("/")
-            logger.info("Using S3 schema store.", bucket=bucket, prefix=prefix)
-            return S3SchemaStore(bucket, prefix)
-        logger.critical("Unsupported schema store scheme.", scheme=parsed.scheme, path=storage_config.schema_path)
-        raise ValueError(f"Unsupported schema store scheme {parsed.scheme!r}.")
+        return composition.default_schema_registry(path)
 
     @staticmethod
     def from_path(path: str) -> SchemaStore:

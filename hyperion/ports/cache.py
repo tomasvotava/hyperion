@@ -3,8 +3,9 @@
 Abstract :class:`Cache` base plus its contract types (:class:`CacheStats`,
 :class:`CachingError`). Concrete adapters (``InMemoryCache``, ``LocalFileCache``,
 ``DynamoDBCache``) live in ``hyperion.adapters.cache.*``; ``Cache.from_config``
-reaches them via a deferred import. The deprecated ``PersistentCache`` (the
-``Catalog`` knot, S7) moved to :mod:`hyperion.application.persistent_cache`.
+delegates backend selection to :mod:`hyperion.composition` (the single
+composition root). The deprecated ``PersistentCache`` (the ``Catalog`` knot,
+S7) moved to :mod:`hyperion.application.persistent_cache`.
 """
 
 import hashlib
@@ -13,7 +14,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from io import BytesIO, StringIO
-from pathlib import Path
 from typing import IO, Any, ClassVar, Literal, cast, overload
 
 import snappy
@@ -76,29 +76,11 @@ class Cache(ABC):
         Returns:
             Cache: A cache instance.
         """
-        from hyperion.adapters.cache.dynamodb import DynamoDBCache
-        from hyperion.adapters.cache.filesystem import LocalFileCache
-        from hyperion.adapters.cache.memory import InMemoryCache
+        from hyperion import composition
 
         instance_key = (storage_config.cache_key_prefix, True)
         if instance_key not in Cache._instances:
-            if storage_config.cache_dynamodb_table:
-                logger.info("Using DynamoDB Cache.")
-                cls._instances[instance_key] = DynamoDBCache(
-                    prefix=storage_config.cache_key_prefix,
-                    default_ttl=storage_config.cache_dynamodb_default_ttl,
-                    table_name=storage_config.cache_dynamodb_table,
-                )
-            elif storage_config.cache_local_path:
-                logger.info("Using LocalFileCache.", path=storage_config.cache_local_path)
-                cls._instances[instance_key] = LocalFileCache(
-                    prefix=storage_config.cache_key_prefix, root_path=Path(storage_config.cache_local_path)
-                )
-            else:
-                logger.info("Using InMemory Cache.")
-                cls._instances[instance_key] = InMemoryCache(
-                    prefix=storage_config.cache_key_prefix, default_ttl=storage_config.cache_dynamodb_default_ttl
-                )
+            cls._instances[instance_key] = composition.default_cache()
         return cls._instances[instance_key]
 
     def __init__(self, prefix: str, hash_keys: bool = True, default_ttl: int = DEFAULT_TTL_SECONDS):
