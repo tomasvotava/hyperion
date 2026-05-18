@@ -26,12 +26,12 @@ from hyperion.infrastructure.message_queue import (
 )
 from hyperion.ports.storage import StoragePort
 
-USERS_PARTITION_DATE = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+USERS_PARTITION_DATE = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
 PLACES_PARTITION_DATES = (
-    datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
-    datetime.datetime(2025, 2, 1, tzinfo=datetime.timezone.utc),
+    datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+    datetime.datetime(2025, 2, 1, tzinfo=datetime.UTC),
 )
-SUPERFEATURE_DATE_START = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+SUPERFEATURE_DATE_START = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
 SUPERFEATURE_PARTITION_DATES = [
     quantize_datetime(SUPERFEATURE_DATE_START + datetime.timedelta(days=day), "1d") for day in range(0, 7)
 ]
@@ -321,7 +321,7 @@ class TestLocalDiskPromise:
             storage=FilesystemStorage(tmp_path / "data"),
             schema_store=LocalSchemaStore(tmp_path / "schemas"),
         )
-        asset = DataLakeAsset("diskasset", datetime.datetime(2025, 3, 1, tzinfo=datetime.timezone.utc))
+        asset = DataLakeAsset("diskasset", datetime.datetime(2025, 3, 1, tzinfo=datetime.UTC))
         records = [{"id": "one"}, {"id": "two"}]
         catalog.store_asset(asset, records, notify=False)
 
@@ -455,7 +455,7 @@ class TestAvroRoundtrip:
         schema_path = test_tmp_dir / "schemas" / "metadata-check.v1.avro.json"
         schema_path.write_text(json.dumps(schema))
 
-        date = datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc)
+        date = datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC)
         asset = DataLakeAsset("metadata-check", date)
         queue_aware_catalog.store_asset(asset, [{"id": "x"}], notify=False, schema_path=schema_path.as_posix())
 
@@ -525,7 +525,7 @@ class TestPartitionIterationRegex:
         schema = {"type": "record", "name": "X", "fields": [{"name": "id", "type": "string"}]}
         schema_path = test_tmp_dir / "schemas" / "multiver.v1.avro.json"
         schema_path.write_text(json.dumps(schema))
-        date = datetime.datetime(2025, 6, 1, tzinfo=datetime.timezone.utc)
+        date = datetime.datetime(2025, 6, 1, tzinfo=datetime.UTC)
         catalog.store_asset(
             DataLakeAsset("multiver", date, schema_version=1),
             [{"id": "v1"}],
@@ -658,8 +658,8 @@ class TestRepartition:
             schema_store=LocalSchemaStore(tmp_path / "schemas"),
             queue=InMemoryQueue(),
         )
-        day_one = datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.timezone.utc)
-        day_two = datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.timezone.utc)
+        day_one = datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.UTC)
+        day_two = datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.UTC)
         records = [
             {"id": "a", "timestamp": day_one},
             {"id": "b", "timestamp": day_one.replace(hour=20)},
@@ -671,8 +671,8 @@ class TestRepartition:
 
         partitions = sorted(catalog.iter_datalake_partitions("repart"), key=lambda asset: asset.date)
         assert [p.date for p in partitions] == [
-            datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
-            datetime.datetime(2025, 1, 2, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+            datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC),
         ]
         first_day = list(catalog.retrieve_asset(partitions[0]))
         assert {row["id"] for row in first_day} == {"a", "b"}

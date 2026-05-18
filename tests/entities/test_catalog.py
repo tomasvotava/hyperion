@@ -19,7 +19,7 @@ from hyperion.entities.catalog import (
     get_prefixed_path,
 )
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 class TestGetPrefixedPath:

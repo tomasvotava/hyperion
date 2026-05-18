@@ -18,7 +18,7 @@ from hyperion.dateutils import (
 # ruff: noqa: DTZ001
 
 
-dt = functools.partial(datetime.datetime, tzinfo=datetime.timezone.utc)
+dt = functools.partial(datetime.datetime, tzinfo=datetime.UTC)
 
 
 @pytest.mark.parametrize(
@@ -87,6 +87,8 @@ def test_time_resolution_wrong_args(value: Any, unit: Any, error: str) -> None:
         (dt(2023, 10, 5, 14, 30, 45, 123456), "w", dt(2023, 10, 2)),
         (dt(2023, 10, 5, 14, 30, 45, 123456), "M", dt(2023, 10, 1)),
         (dt(2023, 10, 5, 14, 30, 45, 123456), "y", dt(2023, 1, 1)),
+        # A bare date (not datetime) is promoted to a UTC datetime first.
+        (datetime.date(2023, 10, 5), "d", dt(2023, 10, 5)),
     ],
 )
 def test_truncate_datetime(base: datetime.datetime, unit: TimeResolutionUnit, expected: datetime.datetime) -> None:

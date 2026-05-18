@@ -1,0 +1,115 @@
+# DDD layering contract (docs/ddd-refactor-plan.md:184-193, epic #137 / S10).
+#
+# Scope: this enforces the *internal* hyperion layering (who may statically
+# import whom). The complementary "lite core pulls no heavy third-party"
+# guarantee is enforced separately by tests/test_import_graph.py and S10's
+# no-extras smoke job -- NOT here -- because `haversine` soft-imports `numpy`
+# and hyperion.domain.geo carries a TYPE_CHECKING `import numpy`, so an
+# external-package contract would false-positive on numpy. Hence
+# include_external_packages stays False (default): contracts are graph-internal.
+#
+# Deprecation-shim modules (hyperion.entities, hyperion.typeutils,
+# hyperion.infrastructure.*, the hyperion.catalog namespace shim) are
+# intentionally NOT layer-constrained: they exist only to redirect old import
+# paths to the new locations and are removed in 2.0. They resolve relocated
+# concretes lazily via importlib (no static edge) but a couple carry
+# TYPE_CHECKING edges into hyperion.data by design.
+#
+# `allow_indirect_imports = True` on contracts 2-5 keeps them *direct-import*
+# checks: the S8 design has ports.{queue,cache,schema_registry,secrets}
+# lazily delegate to hyperion.composition (which then imports an adapter inside
+# a config branch), so ports -> composition -> adapters is an intentional
+# *indirect* chain. Direct-edge enforcement is what code review reasons about;
+# the transitive lite promise is covered by test_import_graph.py + smoke jobs.
+
+[importlinter]
+root_package = hyperion
+include_external_packages = False
+
+# Rule 1 -- domain is pure: no inward dependency on any other hyperion layer
+# (only stdlib / pydantic / dateutil / lite-core hyperion.{log,dateutils,
+# asyncutils,config,typeutils} are allowed, which this contract does not
+# constrain). Strict: indirect chains are caught too.
+[importlinter:contract:domain-isolation]
+name = domain depends on nothing but lite core
+type = forbidden
+source_modules =
+    hyperion.domain
+forbidden_modules =
+    hyperion.ports
+    hyperion.adapters
+    hyperion.application
+    hyperion.data
+    hyperion.composition
+    hyperion.catalog
+    hyperion.infrastructure
+
+# Rule 2 -- ports depend only on domain (+ lite core). They may lazily
+# delegate to the composition root (S8 from_config), so hyperion.composition
+# is deliberately NOT forbidden here.
+[importlinter:contract:ports-isolation]
+name = ports do not reach into adapters/application/data/catalog
+type = forbidden
+source_modules =
+    hyperion.ports
+forbidden_modules =
+    hyperion.adapters
+    hyperion.application
+    hyperion.data
+    hyperion.catalog
+allow_indirect_imports = True
+
+# Rule 3 -- the application tier (hyperion.application + the Catalog
+# orchestration module hyperion.catalog.catalog) may import domain/ports but
+# never adapters. Scoped to hyperion.catalog.catalog, not the whole
+# hyperion.catalog package, because catalog/__init__.py (S9 lazy namespace)
+# and catalog/schema.py (S6 deprecation shim) are intentionally NOT
+# layer-constrained (see header). Documented carve-out: Catalog uses the avro
+# serializer adapter directly (S5; Catalog stayed at hyperion.catalog rather
+# than moving to application/).
+[importlinter:contract:application-no-adapters]
+name = application/catalog never import adapters (except the avro serializer)
+type = forbidden
+source_modules =
+    hyperion.application
+    hyperion.catalog.catalog
+forbidden_modules =
+    hyperion.adapters
+ignore_imports =
+    hyperion.catalog.catalog -> hyperion.adapters.serialization.avro
+allow_indirect_imports = True
+
+# Rule 4 -- adapters may import domain/ports + their backend's third-party,
+# but never the application tier nor the composition root (rule 6 corollary).
+[importlinter:contract:adapters-no-up]
+name = adapters do not import application/catalog/composition
+type = forbidden
+source_modules =
+    hyperion.adapters
+forbidden_modules =
+    hyperion.application
+    hyperion.catalog
+    hyperion.composition
+allow_indirect_imports = True
+
+# Rule 5 -- hyperion.data is a leaf validation-stack adapter package: no live
+# layer may import it (only data/ itself and tests).
+[importlinter:contract:data-isolation]
+name = data is not imported by any live layer
+type = forbidden
+source_modules =
+    hyperion.domain
+    hyperion.ports
+    hyperion.application
+    hyperion.adapters
+    hyperion.composition
+    hyperion.catalog
+forbidden_modules =
+    hyperion.data
+allow_indirect_imports = True
+
+# Rule 6 -- composition.py is the ONLY module allowed to import from both
+# hyperion.ports and hyperion.adapters and construct adapters from config.
+# This is enforced by construction via the conjunction of rules 2-5: nothing
+# but composition (and the documented Catalog->avro carve-out) imports
+# hyperion.adapters, so no extra contract is required.

@@ -61,7 +61,7 @@ class TimeResolution:
 def truncate_datetime(base: datetime.datetime | datetime.date, unit: TimeResolutionUnit) -> datetime.datetime:
     """Truncate datetime to the specified unit (set all smaller units to zero)."""
     if not isinstance(base, datetime.datetime):
-        base = datetime.datetime(base.year, base.month, base.day, tzinfo=datetime.timezone.utc)
+        base = datetime.datetime(base.year, base.month, base.day, tzinfo=datetime.UTC)
     match unit:
         case "s":
             return base.replace(microsecond=0)
@@ -189,7 +189,7 @@ def quantize_datetime(base: datetime.datetime, resolution: TimeResolution | str)
 
 
 def assure_timezone(
-    base: datetime.datetime | datetime.date, tz: datetime.timezone = datetime.timezone.utc
+    base: datetime.datetime | datetime.date, tz: datetime.timezone = datetime.UTC
 ) -> datetime.datetime:
     """Assure datetime has a datetime and return it timezone-aware if not."""
     if not isinstance(base, datetime.datetime):
@@ -235,7 +235,7 @@ def get_date_pattern(date: datetime.datetime, unit: TimeResolutionUnit) -> str:
 
 
 def utcnow() -> datetime.datetime:
-    return datetime.datetime.now(tz=datetime.timezone.utc)
+    return datetime.datetime.now(tz=datetime.UTC)
 
 
 def iter_intervals(

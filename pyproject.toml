@@ -8,25 +8,39 @@ license = "MIT"
 packages = [{ include = "hyperion" }]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.15"
+python = ">=3.11,<3.15"
+
+# -- Lite core (default install): always installed. --
 loguru = ">=0.7.2,<0.8"
-fastavro = ">=1.10,<2"
-boto3 = ">=1.35.36,<2"
 env-proxy = "^1.1.1"
 python-dotenv = "^1.0.1"
-python-snappy = ">=0.7.3,<0.8"
-googlemaps = ">=4.10,<5"
 cachetools = ">=5.5.2,<8.0.0"
 python-dateutil = "^2.9.0.post0"
 pydantic = "^2.10.6"
 aws-lambda-typing = "^2.20.0"
-aioboto3 = ">=13.2,<14"
 haversine = ">=2.9,<3"
-numpy = ">=2.2.3,<3"
 httpx = ">=0.28.1,<0.29"
-polars = "^1.35.0"
-pandera = { extras = ["polars", "pandas"], version = ">=0.27,<0.32" }
 click = ">=8.2.1,<9"
+
+# -- Optional, gated by extras (see [tool.poetry.extras]). Version
+#    constraints are intentionally byte-identical to pre-1.0 (#168 owns
+#    version ranges; S10 only flips these to optional). --
+boto3 = { version = ">=1.35.36,<2", optional = true }
+aioboto3 = { version = ">=13.2,<14", optional = true }
+polars = { version = "^1.35.0", optional = true }
+pandera = { extras = ["polars", "pandas"], version = ">=0.27,<0.32", optional = true }
+numpy = { version = ">=2.2.3,<3", optional = true }
+fastavro = { version = ">=1.10,<2", optional = true }
+googlemaps = { version = ">=4.10,<5", optional = true }
+python-snappy = { version = ">=0.7.3,<0.8", optional = true }
+
+[tool.poetry.extras]
+aws = ["boto3", "aioboto3"]
+data = ["polars", "pandera", "numpy"]
+catalog = ["fastavro"]
+geo = ["googlemaps"]
+snappy = ["python-snappy"]
+all = ["boto3", "aioboto3", "polars", "pandera", "numpy", "fastavro", "googlemaps", "python-snappy"]
 
 [tool.poetry.group.dev.dependencies]
 ruff = ">=0.9.10,<0.18.0"
@@ -38,17 +52,17 @@ types-cachetools = ">=5.5.0.20240820,<8.0.0.0"
 types-python-dateutil = "^2.9.0.20241003"
 pytest-asyncio = ">=0.25.3,<2.0.0"
 moto = { extras = ["server"], version = ">=5.1.1,<6" }
-typing-extensions = { version = "^4.12.2", python = "<3.11" }
 commitizen = "^4.4.1"
 mypy-boto3 = "^1.38.0"
 mypy-boto3-s3 = "^1.38.0"
+import-linter = ">=2.0,<3"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint.per-file-ignores]
@@ -76,6 +90,13 @@ select = [
     "PD",
     "RUF",
     "T20",
+]
+ignore = [
+    # py3.11 floor enables UP042 (str+Enum -> StrEnum). Migrating is
+    # behaviour-changing (StrEnum alters str()/format output, and
+    # ArrivalEvent rides in message envelopes), which the DDD refactor
+    # forbids. StrEnum migration is deferred to a separate, non-S10 change.
+    "UP042",
 ]
 
 [tool.pytest.ini_options]
@@ -105,5 +126,5 @@ tag_format = "$version"
 version_scheme = "semver"
 version_provider = "poetry"
 update_changelog_on_bump = true
-major_version_zero = true
+major_version_zero = false
 changelog_incremental = true

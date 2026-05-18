@@ -1,16 +1,12 @@
 import asyncio
 import inspect
-import sys
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from hyperion.log import get_logger
 
-if sys.version_info >= (3, 11) and TYPE_CHECKING:
+if TYPE_CHECKING:
     from typing import Self
-
-if sys.version_info < (3, 11) and TYPE_CHECKING:
-    from typing_extensions import Self
 
 T = TypeVar("T")
 

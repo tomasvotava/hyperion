@@ -29,7 +29,7 @@ from hyperion.infrastructure.message_queue import (
     iter_messages_from_sqs_event,
 )
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 
 
 @pytest.fixture(autouse=True)
