@@ -10,8 +10,11 @@ the step lands, the marker flips to XPASS and CI fails until the marker is remov
 """
 
 import json
+import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -45,11 +48,54 @@ def _loaded_modules(module_name: str) -> set[str]:
 
 def _heavy_pulled_in(module_name: str) -> set[str]:
     loaded = _loaded_modules(module_name)
+    return _heavy_in(loaded)
+
+
+def _heavy_in(loaded: set[str]) -> set[str]:
     hits: set[str] = set()
     for heavy in HEAVY_MODULES:
         if any(m == heavy or m.startswith(f"{heavy}.") for m in loaded):
             hits.add(heavy)
     return hits
+
+
+# Required-no-default storage fields, so `import hyperion.composition` /
+# `hyperion.config` construct cleanly in a hermetic subprocess even though the
+# lite factories below never read these values.
+_LITE_ENV = {
+    "HYPERION_STORAGE_DATA_LAKE_BUCKET": "dl",
+    "HYPERION_STORAGE_FEATURE_STORE_BUCKET": "fs",
+    "HYPERION_STORAGE_PERSISTENT_STORE_BUCKET": "ps",
+    "HYPERION_STORAGE_SCHEMA_PATH": "file:///tmp/hyperion-s8-schemas",
+}
+
+
+def _modules_after_factory(setup: str, call: str, env: dict[str, str]) -> set[str]:
+    """Fresh interpreter with a hermetic env: run `setup`, run `call`, dump `sys.modules`.
+
+    All inherited ``HYPERION_*`` vars are stripped so backend selection is
+    deterministic regardless of the dev/CI environment; ``_LITE_ENV`` + the
+    per-test ``env`` overrides are the only hyperion config the subprocess sees.
+    """
+    program = f"{setup}\n{call}\nimport sys, json\nprint(json.dumps(list(sys.modules.keys())))\n"
+    subprocess_env = {k: v for k, v in os.environ.items() if not k.startswith("HYPERION_")}
+    subprocess_env.update(_LITE_ENV)
+    subprocess_env.update(env)
+    # Run from an isolated cwd so config.py's load_dotenv(find_dotenv(usecwd=True))
+    # can't re-introduce a repo/ancestor .env that would defeat the env strip.
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        result = subprocess.run(  # noqa: S603 - trusted args (sys.executable + literal program)
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=subprocess_env,
+            cwd=isolated_cwd,
+        )
+    if result.returncode != 0:
+        pytest.fail(f"factory subprocess failed ({setup!r} / {call!r}): {result.stderr}")
+    last_line = [line for line in result.stdout.strip().splitlines() if line][-1]
+    return set(json.loads(last_line))
 
 
 # -- These modules must remain lite today and forever --
@@ -283,3 +329,73 @@ def test_s7_deprecated_geo_paths_defer_googlemaps(module: str) -> None:
     # __init__ re-exports Location from hyperion.domain.geo -> haversine.
     forbidden = (HEAVY_MODULES - {"numpy"}) & _heavy_pulled_in(module)
     assert forbidden == set(), f"{module} unexpectedly imports {sorted(forbidden)}"
+
+
+# -- S8 (F9) landed: the composition root centralizes from_config wiring and
+#    imports the selected adapter *inside* its config branch. The central
+#    promise of epic #137: calling `.from_config()` on a lite install whose
+#    config selects a memory/filesystem backend must NOT import boto3 (the
+#    AWS-only adapter modules `import boto3` at module level, so the old
+#    "import all backends, then branch" factories crashed lite installs). One
+#    assertion per delegating factory. snappy/numpy ride along legitimately via
+#    the cache/keyval ports + haversine (same carve-out as the S6/S7 guards);
+#    the contract that matters is "no boto3 / botocore / aioboto3 / fastavro". --
+
+_S8_AWS_AND_CATALOG_DEPS = {"boto3", "botocore", "aioboto3", "fastavro"}
+
+
+def test_composition_module_stays_lite() -> None:
+    # Importing the composition root itself must pull nothing heavy -- every
+    # adapter import is deferred inside a config branch.
+    assert _heavy_pulled_in("hyperion.composition") == set()
+
+
+def test_cache_from_config_lite_pulls_no_boto3() -> None:
+    # No HYPERION_STORAGE_CACHE_* -> InMemoryCache.
+    loaded = _modules_after_factory("from hyperion.ports.cache import Cache", "Cache.from_config()", env={})
+    forbidden = _S8_AWS_AND_CATALOG_DEPS & _heavy_in(loaded)
+    assert forbidden == set(), f"Cache.from_config() (lite) pulled {sorted(forbidden)}"
+
+
+def test_queue_from_config_lite_pulls_no_boto3() -> None:
+    # No HYPERION_QUEUE_* -> InMemoryQueue; the config-consistency check must
+    # also not import SQSQueue (it resolves a backend *name*, not a type).
+    loaded = _modules_after_factory("from hyperion.ports.queue import Queue", "Queue.from_config()", env={})
+    forbidden = _S8_AWS_AND_CATALOG_DEPS & _heavy_in(loaded)
+    assert forbidden == set(), f"Queue.from_config() (lite) pulled {sorted(forbidden)}"
+
+
+def test_filequeue_from_config_lite_pulls_no_boto3(tmp_path: Path) -> None:
+    # A non-memory lite backend (FileQueue) still must not pull boto3 -- proves
+    # the consistency check is boto3-free even when a backend is configured.
+    loaded = _modules_after_factory(
+        "from hyperion.ports.queue import Queue",
+        "Queue.from_config()",
+        env={"HYPERION_QUEUE_PATH": f"{tmp_path}/queue.jsonl"},
+    )
+    forbidden = _S8_AWS_AND_CATALOG_DEPS & _heavy_in(loaded)
+    assert forbidden == set(), f"Queue.from_config() (FileQueue) pulled {sorted(forbidden)}"
+
+
+def test_secrets_from_config_lite_pulls_no_boto3() -> None:
+    # No HYPERION_SECRETS_BACKEND -> DummySecretsManager.
+    loaded = _modules_after_factory(
+        "from hyperion.ports.secrets import SecretsManager", "SecretsManager.from_config()", env={}
+    )
+    forbidden = _S8_AWS_AND_CATALOG_DEPS & _heavy_in(loaded)
+    assert forbidden == set(), f"SecretsManager.from_config() (lite) pulled {sorted(forbidden)}"
+
+
+def test_schema_registry_from_config_lite_pulls_no_boto3(tmp_path: Path) -> None:
+    # A file:// schema path -> LocalSchemaStore (the S3SchemaStore branch, which
+    # transitively pulls boto3, must not be imported). LocalSchemaStore validates
+    # the path exists (unchanged behaviour), so create it first.
+    schemas_dir = tmp_path / "schemas"
+    schemas_dir.mkdir()
+    loaded = _modules_after_factory(
+        "from hyperion.ports.schema_registry import SchemaStore",
+        "SchemaStore.from_config()",
+        env={"HYPERION_STORAGE_SCHEMA_PATH": schemas_dir.as_uri()},
+    )
+    forbidden = _S8_AWS_AND_CATALOG_DEPS & _heavy_in(loaded)
+    assert forbidden == set(), f"SchemaStore.from_config() (lite) pulled {sorted(forbidden)}"

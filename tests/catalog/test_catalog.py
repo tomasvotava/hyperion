@@ -345,7 +345,11 @@ def test_from_config_uses_correct_per_store_prefixes(monkeypatch: pytest.MonkeyP
         feature_store_prefix="fs",
         persistent_store_prefix="ps",
     )
-    monkeypatch.setattr("hyperion.catalog.catalog.storage_config", fake_config)
+    # S8: Catalog.from_config() now delegates storage construction to the
+    # composition root, so the storage_config the buckets/prefixes are read
+    # from lives in hyperion.composition (single shared config.py instance --
+    # production behaviour is unchanged).
+    monkeypatch.setattr("hyperion.composition.storage_config", fake_config)
     # from_config() builds a default SchemaStore from env; stub it out so this
     # test stays focused on storage wiring.
     monkeypatch.setattr("hyperion.catalog.catalog.SchemaStore", types.SimpleNamespace(from_config=lambda: object()))

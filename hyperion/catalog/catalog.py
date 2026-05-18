@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from hyperion.adapters.serialization.avro import AvroSerializer, AvroStreamWriter
 from hyperion.asyncutils import AsyncTaskQueue, aiter_any
-from hyperion.config import storage_config
 from hyperion.dateutils import (
     TimeResolution,
     TimeResolutionUnit,
@@ -224,21 +223,9 @@ class Catalog:
         the pre-refactor catalog. (Fixes a long-standing bug where the feature
         store used the *data lake* prefix.)
         """
-        from hyperion.adapters.storage.s3 import S3Storage
+        from hyperion import composition
 
-        def _prefix(value: str) -> str:
-            value = value.strip("/")
-            return f"{value}/" if value else ""
-
-        return Catalog(
-            storage={
-                "data_lake": S3Storage(storage_config.data_lake_bucket, _prefix(storage_config.data_lake_prefix)),
-                "feature": S3Storage(storage_config.feature_store_bucket, _prefix(storage_config.feature_store_prefix)),
-                "persistent_store": S3Storage(
-                    storage_config.persistent_store_bucket, _prefix(storage_config.persistent_store_prefix)
-                ),
-            }
-        )
+        return Catalog(storage=composition.default_storage())
 
     @contextmanager
     def _prepare_asset_storage(
