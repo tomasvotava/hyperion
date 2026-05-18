@@ -9,7 +9,7 @@ on:
       - master
 
 jobs:
-  pre-commit:
+  pytest:
     runs-on: ubuntu-latest
     strategy:
       matrix:
