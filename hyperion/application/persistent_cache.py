@@ -17,7 +17,7 @@ from __future__ import annotations
 from base64 import b64decode, b64encode
 from typing import Any
 
-from hyperion.catalog import AssetNotFoundError, Catalog
+from hyperion.catalog.catalog import AssetNotFoundError, Catalog
 from hyperion.dateutils import utcnow
 from hyperion.domain.assets import PersistentStoreAsset
 from hyperion.log import get_logger
