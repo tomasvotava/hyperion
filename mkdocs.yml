@@ -3,7 +3,6 @@ site_description: A headless ETL / ELT / data pipeline and integration SDK for P
 site_url: https://tomasvotava.github.io/hyperion/
 repo_url: https://github.com/tomasvotava/hyperion
 repo_name: tomasvotava/hyperion
-edit_uri: edit/master/docs/
 copyright: Copyright &copy; Tomas Votava
 
 theme:
@@ -17,7 +16,6 @@ theme:
     - search.suggest
     - search.highlight
     - content.code.copy
-    - content.action.edit
   palette:
     - scheme: default
       primary: indigo

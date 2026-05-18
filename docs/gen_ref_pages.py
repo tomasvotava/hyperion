@@ -87,11 +87,6 @@ for dotted in PUBLIC_MODULES:
     with mkdocs_gen_files.open(doc_path, "w") as fd:
         fd.write(f"# `{dotted}`\n\n::: {dotted}\n")
 
-    mkdocs_gen_files.set_edit_path(
-        doc_path,
-        f"https://github.com/tomasvotava/hyperion/blob/master/{Path(*parts)}.py",
-    )
-
 # The whole Reference section is literate-nav driven from this SUMMARY.md
 # (mkdocs.yml has a single `- Reference: reference/` entry). Prepend the
 # hand-written migration page, then nest the generated API tree under an
