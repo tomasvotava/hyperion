@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.2 (2026-05-18)
+
+### Refactor
+
+- **geocoder**: remove PersistentCache knot, inject KeyValueStore
+- **adapters**: relocate cache/keyval/queue/secrets/schema impls
+- **catalog**: depend on StoragePort, extract avro serializer
+- **storage**: add StoragePort + memory/filesystem/s3 adapters
+- **geo**: extract pure-domain Location, drop cache singleton
+- split typeutils and asset identities from the data stack
+- **ports**: extract abstract bases into hyperion/ports
+
 ## 0.15.1 (2026-05-12)
 
 ### Fix
