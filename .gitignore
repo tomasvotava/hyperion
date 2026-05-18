@@ -145,6 +145,11 @@ venv.bak/
 
 # mkdocs documentation
 /site
+# API reference is generated into the build tree by mkdocs-gen-files; guard
+# the source tree against a stray standalone run of docs/gen_ref_pages.py.
+/docs/reference/**
+!/docs/reference/
+!/docs/reference/migration-pre-1.0.md
 
 # mypy
 .mypy_cache/

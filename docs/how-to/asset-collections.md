@@ -1,6 +1,7 @@
-# Asset Collections in Hyperion
+# Fetch data with Asset Collections
 
-Asset Collections provide a type-safe, declarative way to fetch and work with data assets from the Hyperion catalog.
+Asset Collections provide a type-safe, declarative way to fetch and work with
+data assets from the Hyperion catalog.
 
 ## Overview
 
@@ -12,13 +13,14 @@ The `AssetCollection` system makes it easy to:
 - Control concurrency during fetching
 - Work with either Pydantic models or Polars DataFrames
 
-## Basic Usage
+## Basic usage
 
-### 1. Define a Feature Model
+### 1. Define a feature model
 
-You can define feature models using either Pydantic (for object-oriented data) or Pandera with Polars (for large datasets).
+You can define feature models using either Pydantic (for object-oriented data)
+or Pandera with Polars (for large datasets).
 
-#### Option A: Pydantic Model
+#### Option A: Pydantic model
 
 Create a model class that extends both `FeatureModel` and `pydantic.BaseModel`.
 Feature models live in `hyperion.data`, so this requires the `[data]` extra
@@ -41,9 +43,10 @@ class WeatherFeature(FeatureModel, BaseModel):
     humidity: float
 ```
 
-#### Option B: Polars Model with Pandera
+#### Option B: Polars model with Pandera
 
-For large datasets or analytics workloads, create a model using `PolarsFeatureModel`:
+For large datasets or analytics workloads, create a model using
+`PolarsFeatureModel`:
 
 ```python
 import polars as pl
@@ -63,7 +66,7 @@ class WeatherPolarsFeature(PolarsFeatureModel):
     humidity: pt.Series[Float64]
 ```
 
-### 2. Create an Asset Collection
+### 2. Create an asset collection
 
 Define a collection class that declares what feature data you need:
 
@@ -86,7 +89,7 @@ class WeatherDataCollection(AssetCollection):
     )
 ```
 
-### 3. Fetch and Use the Data
+### 3. Fetch and use the data
 
 ```python
 # Fetch all data asynchronously
@@ -106,9 +109,9 @@ historical_df = WeatherDataCollection.historical_weather.collect()
 print(f"Records: {len(historical_df)}")
 ```
 
-## Advanced Features
+## Advanced features
 
-### Custom Catalog
+### Custom catalog
 
 You can specify a custom catalog for your collection:
 
@@ -119,36 +122,34 @@ class CustomCollection(AssetCollection):
     weather_polars = PolarsFeatureFetchSpecifier(WeatherPolarsFeature)
 ```
 
-### Concurrency Control
+### Concurrency control
 
 Control how many concurrent fetches are allowed:
 
 ```python
 class LimitedConcurrencyCollection(AssetCollection):
-    max_concurrency: ClassVar = 4  # Limit to 4 concurrent requests
+    max_concurrency: ClassVar = 4  # limit to 4 concurrent requests
     weather = FeatureFetchSpecifier(WeatherFeature)
 ```
 
-### Reset Data
+### Reset data
 
 Clear fetched data to fetch again:
 
 ```python
-# Clear all data
 WeatherDataCollection.clear()
-
-# Fetch fresh data
 await WeatherDataCollection.fetch_all()
 ```
 
-## Working with Polars Data
+## Working with Polars data
 
-When using `PolarsFeatureFetchSpecifier`, you get a LazyFrame with the following benefits:
+When using `PolarsFeatureFetchSpecifier`, you get a LazyFrame with the
+following benefits:
 
-1. **Lazy Evaluation**: Operations are only executed when you call `.collect()`
-2. **Query Optimization**: Polars optimizes the execution plan
-3. **Memory Efficiency**: Great for working with millions of rows
-4. **Type Safety**: Full schema validation through Pandera
+1. **Lazy evaluation**: operations execute only when you call `.collect()`
+2. **Query optimization**: Polars optimises the execution plan
+3. **Memory efficiency**: great for working with millions of rows
+4. **Type safety**: full schema validation through Pandera
 
 Example operations:
 
@@ -167,40 +168,42 @@ monthly_avg = WeatherDataCollection.historical_weather.group_by(
 ).collect()
 ```
 
-## Important Notes
+## Important notes
 
-1. **Shared Data**: All instances of a collection class share the same data.
-
-2. **Lazy Fetching**: Data is not fetched until `fetch_all()` is called.
-
-3. **Class-level API**: Most methods are class methods, not instance methods.
-
+1. **Shared data**: all instances of a collection class share the same data.
+2. **Lazy fetching**: data is not fetched until `fetch_all()` is called.
+3. **Class-level API**: most methods are class methods, not instance methods.
 4. **Requirements**:
-   - Pydantic models must have `asset_name` and `resolution` class variables
-   - Polars models must have `_asset_name` and `_resolution` class variables
+    - Pydantic models must have `asset_name` and `resolution` class variables
+    - Polars models must have `_asset_name` and `_resolution` class variables
+5. **Data size considerations**:
+    - Use Pydantic models for smaller datasets and object-oriented manipulation
+    - Use Polars models for large datasets (millions of rows) and analytics
 
-5. **Data Size Considerations**:
-   - Use Pydantic models for smaller datasets and when you need object-oriented manipulation
-   - Use Polars models for large datasets (millions of rows) and analytical operations
-
-## Date Specifications
+## Date specifications
 
 You can specify date ranges in multiple ways:
 
-- **Absolute dates**: Use `datetime` objects
-- **Relative dates**: Use `timedelta` objects (negative for past, positive for future)
-- **Mixed**: Combine absolute and relative dates
+- **Absolute dates**: use `datetime` objects
+- **Relative dates**: use `timedelta` objects (negative for past, positive for future)
+- **Mixed**: combine absolute and relative dates
 
 A date specification of `None` means:
 
-- For `start_date`: Use minimum date (fetch all historical data)
-- For `end_date`: Use current time (fetch up to now)
+- For `start_date`: use the minimum date (fetch all historical data)
+- For `end_date`: use the current time (fetch up to now)
 
-## Coming Soon
+## Coming soon
 
 Future versions will include:
 
-- Enhanced Polars streaming capabilities for extremely large datasets
+- Enhanced Polars streaming for extremely large datasets
 - Column projection to reduce I/O for large datasets
 - Support for DataLake and PersistentStore assets
 - Advanced caching strategies for feature data
+
+## See also
+
+- [Work with FeatureAssets](feature-assets.md) for the lower-level API.
+- The [`hyperion.repository.asset_collection`](../reference/repository/asset_collection.md)
+  API reference.
