@@ -137,3 +137,17 @@ def test_s3_prefix_is_transparent_to_callers() -> None:
     assert list(storage.iter_keys("data/")) == ["data/obj.bin"]
     raw_keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket=bucket)["Contents"]]
     assert raw_keys == ["tenant-a/data/obj.bin"]
+
+
+@pytest.mark.usefixtures("_moto_server")
+async def test_s3_put_async_does_not_close_caller_stream() -> None:
+    bucket = f"hyperion-storage-async-{uuid.uuid4().hex}"
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=bucket)
+    storage = S3Storage(bucket)
+
+    buf = BytesIO(b"caller-owned-stream")
+    await storage.put_async("stream/obj.bin", buf)
+    assert not buf.closed  # issue #148: caller-owned stream must stay open
+    assert storage.get("stream/obj.bin") == b"caller-owned-stream"
+
+    await storage.put_async("bytes/obj.bin", b"async-bytes")
