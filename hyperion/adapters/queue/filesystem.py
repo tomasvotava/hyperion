@@ -55,11 +55,24 @@ class FileQueue(Queue):
             {"message_type": message.__class__.__name__, "message": message.model_dump_json()}
             for message in self._messages
         ]
-        self.queue_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile("w", dir=self.queue_path.parent, delete=False) as tmp_file:
-            json.dump(serializable_list, tmp_file)
-            tmp_path = tmp_file.name
-        os.replace(tmp_path, self.queue_path)  # noqa: PTH105 - atomic same-dir replace
+        parent = self.queue_path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        tmp_path: str | None = None
+        try:
+            # encoding pinned to utf-8 to match iter_messages_from_file's reader;
+            # flush + fsync guarantee the bytes hit disk before the atomic rename.
+            with tempfile.NamedTemporaryFile("w", dir=parent, delete=False, encoding="utf-8") as tmp_file:
+                tmp_path = tmp_file.name
+                json.dump(serializable_list, tmp_file)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            os.replace(tmp_path, self.queue_path)  # noqa: PTH105 - atomic same-dir replace
+        except Exception:
+            # delete=False means a failure before the rename would otherwise
+            # strand the temp file next to the queue file.
+            if tmp_path is not None:
+                Path(tmp_path).unlink(missing_ok=True)
+            raise
         logger.info(
             f"Flushed {len(self._messages)} from FileQueue.",
             queue=self,
