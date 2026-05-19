@@ -6,6 +6,7 @@ Mirrors the parametrize-over-backends pattern of
 so the same suite runs identically against memory / filesystem / s3.
 """
 
+import hashlib
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,8 @@ from hyperion.adapters.storage.filesystem import FilesystemStorage
 from hyperion.adapters.storage.memory import MemoryStorage
 from hyperion.adapters.storage.s3 import S3Storage
 from hyperion.ports.storage import ObjectNotFoundError, StoragePort
+
+_LARGE_PAYLOAD = b"hyperion-storage-stream-test\n" * 200_000  # ~5.6 MiB
 
 
 @pytest.fixture
@@ -151,3 +154,19 @@ async def test_s3_put_async_does_not_close_caller_stream() -> None:
     assert storage.get("stream/obj.bin") == b"caller-owned-stream"
 
     await storage.put_async("bytes/obj.bin", b"async-bytes")
+    assert storage.get("bytes/obj.bin") == b"async-bytes"
+
+
+def test_filesystem_put_streams_large_filelike(filesystem_storage: FilesystemStorage) -> None:
+    filesystem_storage.put("big/obj.bin", BytesIO(_LARGE_PAYLOAD))
+    assert filesystem_storage.get("big/obj.bin") == _LARGE_PAYLOAD
+
+
+def test_filesystem_get_attributes_etag_correct_for_large_payload(
+    filesystem_storage: FilesystemStorage,
+) -> None:
+    filesystem_storage.put("big/obj.bin", BytesIO(_LARGE_PAYLOAD))
+    attrs = filesystem_storage.get_attributes("big/obj.bin")
+    expected_etag = hashlib.md5(_LARGE_PAYLOAD, usedforsecurity=False).hexdigest()
+    assert attrs.etag == expected_etag
+    assert attrs.size == len(_LARGE_PAYLOAD)

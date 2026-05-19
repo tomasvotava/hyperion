@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,9 +20,7 @@ from hyperion.ports.storage import ObjectAttributes, ObjectNotFoundError
 
 logger = get_logger("adapters.storage.filesystem")
 
-
-def _to_bytes(data: bytes | IO[bytes]) -> bytes:
-    return data if isinstance(data, bytes) else data.read()
+_HASH_CHUNK_SIZE = 64 * 1024  # 64 KiB read window for streaming md5.
 
 
 class FilesystemStorage:
@@ -40,7 +39,13 @@ class FilesystemStorage:
         target = self._resolve(key)
         logger.debug("Writing object to disk.", key=key, path=target.as_posix())
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(_to_bytes(data))
+        if isinstance(data, bytes):
+            target.write_bytes(data)
+        else:
+            # Stream the caller's file-like input without materializing it
+            # in memory; the caller owns and closes their stream (#147/#148).
+            with target.open("wb") as fh:
+                shutil.copyfileobj(data, fh)
 
     async def put_async(self, key: str, data: bytes | IO[bytes]) -> None:
         self.put(key, data)
@@ -82,8 +87,12 @@ class FilesystemStorage:
             stat = target.stat()
         except FileNotFoundError as error:
             raise ObjectNotFoundError(key) from error
+        digest = hashlib.md5(usedforsecurity=False)
+        with target.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(_HASH_CHUNK_SIZE), b""):
+                digest.update(chunk)
         return ObjectAttributes(
-            etag=hashlib.md5(target.read_bytes(), usedforsecurity=False).hexdigest(),
+            etag=digest.hexdigest(),
             size=stat.st_size,
             last_modified=datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.UTC),
         )
