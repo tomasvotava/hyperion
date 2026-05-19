@@ -56,7 +56,16 @@ def meters_to_degrees(meters: float, at_latitude: float) -> tuple[float, float]:
 
     Returns:
         tuple[float, float]: The distance in degrees for latitude and longitude.
+
+    Raises:
+        ValueError: If ``at_latitude`` is ±90 (the poles), where longitude
+            degrees are geometrically undefined (cos(±90°) = 0).
     """
+    if abs(at_latitude) >= 90:
+        raise ValueError(
+            f"Cannot convert meters to longitude degrees at latitude {at_latitude}: "
+            "longitude degrees are undefined at the poles (|latitude| >= 90)."
+        )
     return meters / LATITUDE_DEGREE_TO_METERS, meters / (
         LATITUDE_DEGREE_TO_METERS * math.cos(math.radians(at_latitude))
     )
@@ -185,6 +194,8 @@ class Location:
         nearest: tuple[AnyLocation, float] | None = None
         for other in others:
             distance = self.get_distance(other, approximate=approximate)
+            if threshold is not None and distance > threshold:
+                continue
             if nearest is None or nearest[1] > distance:
                 nearest = (other, distance)
         if nearest is None:
