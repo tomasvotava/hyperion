@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -55,9 +55,11 @@ class FileQueue(Queue):
             {"message_type": message.__class__.__name__, "message": message.model_dump_json()}
             for message in self._messages
         ]
-        with tempfile.NamedTemporaryFile("w", delete=False) as tmp_file:
+        self.queue_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=self.queue_path.parent, delete=False) as tmp_file:
             json.dump(serializable_list, tmp_file)
-        shutil.move(tmp_file.name, self.queue_path)
+            tmp_path = tmp_file.name
+        os.replace(tmp_path, self.queue_path)  # noqa: PTH105 - atomic same-dir replace
         logger.info(
             f"Flushed {len(self._messages)} from FileQueue.",
             queue=self,
