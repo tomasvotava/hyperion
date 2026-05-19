@@ -647,6 +647,106 @@ class TestStoreAssetAsync:
         assert len(queue._messages) == 1
 
 
+class _SlowSerializer:
+    SERIALIZE_SECONDS = 0.3
+
+    def __init__(self) -> None:
+        self.write_thread: int | None = None
+
+    def write(self, fp: Any, schema: dict[str, Any], records: Any, metadata: dict[str, str]) -> None:
+        import threading
+        import time
+
+        self.write_thread = threading.get_ident()
+        time.sleep(self.SERIALIZE_SECONDS)
+        fastavro.writer(fp, schema=schema, records=list(records), metadata=metadata)
+
+    def read(self, fp: Any) -> Any:
+        # Delegates to fastavro so the existing-style round-trip assertion can
+        # decode what write() produced (mirrors AvroSerializer.read).
+        yield from fastavro.reader(fp)
+
+
+class TestStoreAsyncDoesNotBlockLoop:
+    async def test_event_loop_free_during_serialization(self, test_tmp_dir: Path) -> None:
+        import asyncio
+        import threading
+
+        schema = {"type": "record", "name": "NoBlock", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "noblock.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+
+        serializer = _SlowSerializer()
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(test_tmp_dir / "schemas"),
+            queue=InMemoryQueue(),
+            serializer=serializer,  # type: ignore[arg-type]
+        )
+        asset = DataLakeAsset("noblock", utcnow())
+        data = [{"id": "a"}, {"id": "b"}]
+
+        ticks = 0
+        stop = False
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while not stop:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        hb = asyncio.create_task(heartbeat())
+        await catalog.store_asset_async(asset, data, notify=True, schema_path=schema_path.as_posix())
+        stop = True
+        await hb
+
+        assert serializer.write_thread is not None
+        assert serializer.write_thread != threading.get_ident(), "serialize ran on the event-loop thread"
+        assert ticks >= 10, f"event loop was blocked during serialization (only {ticks} ticks)"
+        assert list(catalog.retrieve_asset(asset)) == data
+        queue = catalog.queue
+        assert isinstance(queue, InMemoryQueue)
+        assert len(queue._messages) == 1
+
+
+class TestStoreAsyncTempFileLifecycle:
+    async def test_no_tempfile_leak_on_success(self, test_tmp_dir: Path) -> None:
+        import tempfile as _tempfile
+
+        schema = {"type": "record", "name": "Leak", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "leak-ok.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+        tmp_root = Path(_tempfile.gettempdir())
+        before = set(tmp_root.iterdir())
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(test_tmp_dir / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        asset = DataLakeAsset("leak-ok", utcnow())
+        await catalog.store_asset_async(asset, [{"id": "a"}], notify=False, schema_path=schema_path.as_posix())
+        assert set(tmp_root.iterdir()) - before == set()
+        assert list(catalog.retrieve_asset(asset)) == [{"id": "a"}]
+
+    async def test_tempfile_removed_and_error_propagates_on_bad_data(self, test_tmp_dir: Path) -> None:
+        import tempfile as _tempfile
+
+        schema = {"type": "record", "name": "BadAsync", "fields": [{"name": "id", "type": "string"}]}
+        schema_path = test_tmp_dir / "schemas" / "leak-bad.v1.avro.json"
+        schema_path.write_text(json.dumps(schema))
+        tmp_root = Path(_tempfile.gettempdir())
+        before = set(tmp_root.iterdir())
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(test_tmp_dir / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        asset = DataLakeAsset("leak-bad", utcnow())
+        with pytest.raises(fastavro.validation.ValidationError):
+            await catalog.store_asset_async(asset, [{"not_id": 123}], notify=True, schema_path=schema_path.as_posix())
+        assert set(tmp_root.iterdir()) - before == set()
+
+
 class TestRepartition:
     async def test_repartition_data_lake_asset_by_day(self, tmp_path: Path) -> None:
         schema_dir = tmp_path / "schemas" / "data_lake"

@@ -6,7 +6,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, BinaryIO, ClassVar, Generic, TypeAlias, TypeVar, cast
 from uuid import uuid4
@@ -227,22 +227,48 @@ class Catalog:
 
         return Catalog(storage=composition.default_storage())
 
+    def _serialize_asset_to_tempfile(
+        self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
+    ) -> Path:
+        """Serialize ``data`` for ``asset`` into a freshly created temp file.
+
+        Returns the path to an undeleted ``NamedTemporaryFile``; the caller owns
+        its lifecycle and MUST delete it (see ``_prepare_asset_storage`` /
+        ``store_asset_async``). All blocking work (schema fetch, avro encode,
+        disk I/O) happens here so it can be run via ``asyncio.to_thread``.
+        """
+        schema = (
+            self.schema_store.get_asset_schema(asset)
+            if schema_path is None
+            else self.schema_store.get_schema_from_path(schema_path)
+        )
+        # delete=False: the file must outlive this function so the caller can
+        # stream it to storage; the caller guarantees deletion in a finally.
+        file = tempfile.NamedTemporaryFile("+wb", delete=False)  # noqa: SIM115
+        path = Path(file.name)
+        try:
+            logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
+            self._serializer.write(file, schema, data, asset.to_metadata())
+            logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
+        except BaseException:
+            file.close()
+            path.unlink(missing_ok=True)
+            raise
+        file.close()
+        return path
+
     @contextmanager
     def _prepare_asset_storage(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
     ) -> Iterator[IO[bytes]]:
-        with tempfile.NamedTemporaryFile("+wb") as file:
-            schema = (
-                self.schema_store.get_asset_schema(asset)
-                if schema_path is None
-                else self.schema_store.get_schema_from_path(schema_path)
-            )
-            path = Path(file.name)
-            logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
-            self._serializer.write(file, schema, data, asset.to_metadata())
-            logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
-            file.seek(0)
-            yield file
+        path = self._serialize_asset_to_tempfile(asset, data, schema_path)
+        try:
+            with path.open("rb") as file:
+                yield file
+        finally:
+            # delete=False in the worker: this context manager owns deletion,
+            # and must drop the temp file even on Exception/BaseException.
+            path.unlink(missing_ok=True)
 
     async def store_asset_async(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True, schema_path: str | None = None
@@ -255,9 +281,15 @@ class Catalog:
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
         logger.info("Preparing asset storage.", asset=asset)
-        with ExitStack() as stack:
-            file = stack.enter_context(await asyncio.to_thread(self._prepare_asset_storage, asset, data, schema_path))
-            await self._resolve_storage(asset).put_async(asset.get_path(), file)
+        prepared_path = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
+        try:
+            with prepared_path.open("rb") as file:
+                await self._resolve_storage(asset).put_async(asset.get_path(), file)
+        finally:
+            # The worker created the temp file with delete=False; this path owns
+            # its deletion and must drop it even on Exception/BaseException
+            # (e.g. an upload failure or cancellation).
+            prepared_path.unlink(missing_ok=True)
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
 
