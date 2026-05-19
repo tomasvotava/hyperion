@@ -87,4 +87,4 @@ def map_pandera_dtype_to_polars(
                     "this is likely the cause."
                 )
             return poldtype
-    raise NotImplementedError(f"Mapping for pandera type {type(pandera_dtype)!r} to a polars type does not exist.")
+    raise NotImplementedError(f"Mapping for pandera type {pandera_dtype!r} to a polars type does not exist.")
