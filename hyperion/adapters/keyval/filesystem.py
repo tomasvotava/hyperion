@@ -3,7 +3,8 @@
 One file per (hashed, prefixed) key under a root directory, mirroring the
 ``LocalFileCache`` idiom. Keys are url-safe-base64 encoded into filenames so
 arbitrary keys (containing ``/``, ``:`` ...) are safe and reversible. Writes
-are atomic (write to a temp file in the same directory, then ``os.replace``).
+are atomic and durable (write to a temp file in the same directory, ``fsync``,
+then ``os.replace``; the temp file is removed if the write fails).
 """
 
 from __future__ import annotations
@@ -55,10 +56,21 @@ class FilesystemStore(KeyValueStore):
 
     def _set_raw(self, hashed_key: str, compresed_value: bytes) -> None:
         key_path = self._path(hashed_key)
-        with tempfile.NamedTemporaryFile("wb", dir=self.root_path, delete=False) as tmp_file:
-            tmp_file.write(compresed_value)
-            tmp_path = tmp_file.name
-        os.replace(tmp_path, key_path)  # noqa: PTH105 - atomic same-dir replace
+        tmp_path: str | None = None
+        try:
+            # flush + fsync guarantee the bytes hit disk before the atomic rename.
+            with tempfile.NamedTemporaryFile("wb", dir=self.root_path, delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+                tmp_file.write(compresed_value)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            os.replace(tmp_path, key_path)  # noqa: PTH105 - atomic same-dir replace
+        except Exception:
+            # delete=False means a failure before the rename would otherwise
+            # strand the temp file in root_path.
+            if tmp_path is not None:
+                Path(tmp_path).unlink(missing_ok=True)
+            raise
 
     def _delete_raw(self, hashed_key: str) -> None:
         self._path(hashed_key).unlink(missing_ok=True)
