@@ -610,6 +610,24 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         self._state[partition_date] = handler
         return handler
 
+    def _write_records(self, data: Iterable[dict[str, Any]]) -> None:
+        """Drain ``data`` into per-partition streaming writers (blocking).
+
+        Runs the synchronous fastavro per-record writes off the event loop in
+        one ``asyncio.to_thread`` hop. Partitioning logic and ``_get_handler``
+        state semantics are unchanged.
+        """
+        for record in data:
+            timestamp = record.get(self.date_attribute)
+            if not isinstance(timestamp, datetime.datetime):
+                raise ValueError(
+                    f"Asset {self.asset!r} cannot be repartitioned using date attribute "
+                    f"{self.date_attribute!r} - it is not a valid datetime."
+                )
+            partition_date = truncate_datetime(timestamp, self.granularity)
+            _, __, writer = self._get_handler(partition_date)
+            writer.write(record)
+
     async def repartition(self, data: Iterable[dict[str, Any]] | None = None) -> None:
         """Repartition the asset.
 
@@ -622,21 +640,12 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         """
         data = data or self.catalog.retrieve_asset(self.asset)
         with self:
-            for record in data:
-                timestamp = record.get(self.date_attribute)
-                if not isinstance(timestamp, datetime.datetime):
-                    raise ValueError(
-                        f"Asset {self.asset!r} cannot be repartitioned using date attribute "
-                        f"{self.date_attribute!r} - it is not a valid datetime."
-                    )
-                partition_date = truncate_datetime(timestamp, self.granularity)
-                _, __, writer = self._get_handler(partition_date)
-                writer.write(record)
+            await asyncio.to_thread(self._write_records, data)
             logger.info("Finished creating partitioned avro files.")
 
             async with AsyncTaskQueue[None](maxsize=5) as queue:
                 async for file, asset, writer in aiter_any(self._state.values()):
                     logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
-                    writer.dump()
+                    await asyncio.to_thread(writer.dump)
                     file.seek(0)
                     await queue.add_task(self.catalog._resolve_storage(asset).put_async(asset.get_path(), file))

@@ -11,6 +11,7 @@ import boto3
 import fastavro
 import pytest
 
+from hyperion.adapters.serialization.avro import AvroSerializer, AvroStreamWriter
 from hyperion.adapters.storage.filesystem import FilesystemStorage
 from hyperion.adapters.storage.memory import MemoryStorage
 from hyperion.adapters.storage.s3 import S3Storage
@@ -778,3 +779,87 @@ class TestRepartition:
         assert {row["id"] for row in first_day} == {"a", "b"}
         second_day = list(catalog.retrieve_asset(partitions[1]))
         assert {row["id"] for row in second_day} == {"c"}
+
+
+class _SlowStreamWriter:
+    """Wraps a real fastavro stream writer; ``write`` blocks like a heavy encode."""
+
+    WRITE_SECONDS = 0.15
+
+    def __init__(self, inner: AvroStreamWriter, owner: "_SlowStreamingSerializer") -> None:
+        self._inner = inner
+        self._owner = owner
+
+    def write(self, record: dict[str, Any]) -> None:
+        import threading
+        import time
+
+        self._owner.write_thread = threading.get_ident()
+        time.sleep(self.WRITE_SECONDS)
+        self._inner.write(record)
+
+    def dump(self) -> None:
+        self._inner.dump()
+
+
+class _SlowStreamingSerializer(AvroSerializer):
+    """Real AvroSerializer whose streaming writer's per-record write is slow."""
+
+    def __init__(self) -> None:
+        self.write_thread: int | None = None
+
+    def streaming_writer(self, fp: Any, schema: dict[str, Any], metadata: dict[str, str]) -> AvroStreamWriter:
+        return _SlowStreamWriter(super().streaming_writer(fp, schema, metadata), self)
+
+
+class TestRepartitionDoesNotBlockLoop:
+    async def test_event_loop_free_during_repartition_writes(self, tmp_path: Path) -> None:
+        import asyncio
+        import threading
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        serializer = _SlowStreamingSerializer()
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+            serializer=serializer,
+        )
+        day_one = datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.UTC)
+        day_two = datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.UTC)
+        records = [
+            {"id": "a", "timestamp": day_one},
+            {"id": "b", "timestamp": day_one.replace(hour=20)},
+            {"id": "c", "timestamp": day_two},
+        ]
+        source_asset = DataLakeAsset("repart", day_one)
+
+        ticks = 0
+        stop = False
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while not stop:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        hb = asyncio.create_task(heartbeat())
+        await catalog.repartition(source_asset, "d", date_attribute="timestamp", data=records)
+        stop = True
+        await hb
+
+        assert serializer.write_thread is not None
+        assert serializer.write_thread != threading.get_ident(), "writer.write ran on the event-loop thread"
+        assert ticks >= 10, f"event loop was blocked during repartition writes (only {ticks} ticks)"
+
+        # Behavioural equivalence: same partitions/rows as the canonical test.
+        partitions = sorted(catalog.iter_datalake_partitions("repart"), key=lambda asset: asset.date)
+        assert [p.date for p in partitions] == [
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+            datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC),
+        ]
+        assert {row["id"] for row in catalog.retrieve_asset(partitions[0])} == {"a", "b"}
+        assert {row["id"] for row in catalog.retrieve_asset(partitions[1])} == {"c"}
