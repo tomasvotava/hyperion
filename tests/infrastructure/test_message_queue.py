@@ -232,6 +232,15 @@ class TestFileQueue:
         with pytest.raises(NotImplementedError):
             queue.delete("anything")
 
+    def test_flush_leaves_no_temp_file_sibling(self, tmp_path: Path) -> None:
+        queue_path = tmp_path / "queue.json"
+        queue = FileQueue(queue_path)
+        with queue:
+            queue.send(_datalake_message())
+        # The directory must contain exactly the queue file — no leftover temp files.
+        siblings = list(tmp_path.iterdir())
+        assert siblings == [queue_path]
+
 
 class TestSQSQueue:
     @pytest.fixture
