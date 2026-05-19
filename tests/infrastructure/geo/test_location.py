@@ -8,6 +8,7 @@ shim stays exercised, and pin the (now cache-less) distance math.
 """
 
 import datetime
+import math
 
 import numpy as np
 import pytest
@@ -93,6 +94,34 @@ class TestGetNearest:
         with pytest.raises(ValueError, match="None of the given locations"):
             origin.get_nearest([])
 
+    def test_threshold_large_enough_returns_nearest(self) -> None:
+        # near is ~111 m away; a 200 m threshold should include it.
+        origin = Location(0.0, 0.0)
+        near = Location(0.0, 0.001)  # ~111 m
+        far = Location(10.0, 10.0)
+        result = origin.get_nearest([far, near], threshold=200.0)
+        assert result is near
+
+    def test_threshold_smaller_than_all_raises(self) -> None:
+        # near is ~111 m away; a 10 m threshold excludes every candidate.
+        origin = Location(0.0, 0.0)
+        near = Location(0.0, 0.001)  # ~111 m
+        far = Location(10.0, 10.0)
+        with pytest.raises(ValueError, match="None of the given locations"):
+            origin.get_nearest([far, near], threshold=10.0)
+
+    def test_threshold_nearest_among_qualifying_candidates_wins(self) -> None:
+        # Three candidates: close (~111 m), mid (~556 m), far (very far).
+        # threshold=700 m: close and mid qualify, far is excluded.
+        # close is the nearest of the qualifying candidates and must win.
+        origin = Location(0.0, 0.0)
+        close = Location(0.0, 0.001)  # ~111 m  — qualifies
+        mid = Location(0.0, 0.005)  # ~556 m  — qualifies
+        far = Location(10.0, 10.0)  # far above threshold — excluded
+        # Feed in reverse distance order to confirm ordering isn't from list position.
+        result = origin.get_nearest([mid, far, close], threshold=700.0)
+        assert result is close
+
 
 class TestNamedLocation:
     def test_frozen_and_equal(self) -> None:
@@ -125,6 +154,22 @@ class TestMetersToDegrees:
         # cos(60deg) = 0.5 → 1 longitude degree covers half the equatorial meters.
         _, lon_deg = meters_to_degrees(111_000, 60.0)
         assert lon_deg == pytest.approx(2.0, rel=1e-9)
+
+    def test_north_pole_raises(self) -> None:
+        with pytest.raises(ValueError, match="poles"):
+            meters_to_degrees(1000, 90.0)
+
+    def test_south_pole_raises(self) -> None:
+        with pytest.raises(ValueError, match="poles"):
+            meters_to_degrees(1000, -90.0)
+
+    def test_normal_latitudes_return_finite_values(self) -> None:
+        lat_deg, lon_deg = meters_to_degrees(1000, 0.0)
+        assert math.isfinite(lat_deg)
+        assert math.isfinite(lon_deg)
+        lat_deg2, lon_deg2 = meters_to_degrees(1000, 60.0)
+        assert math.isfinite(lat_deg2)
+        assert math.isfinite(lon_deg2)
 
 
 class TestSpatialKMeans:
