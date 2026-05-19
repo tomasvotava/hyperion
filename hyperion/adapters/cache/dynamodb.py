@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import time
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import boto3
 
 from hyperion.log import get_logger
 from hyperion.ports.cache import DEFAULT_TTL_SECONDS, Cache, CachingError
+
+if TYPE_CHECKING:
+    from mypy_boto3_dynamodb.type_defs import ScanInputTableScanTypeDef
 
 DYNAMODB_MAX_LENGTH = 65535
 
@@ -70,13 +73,23 @@ class DynamoDBCache(Cache):
         """
         Deletes all items in the table.
 
-        Warning: DynamoDB doesn't have a built-in clear mechanism, so we scan and delete all items manually.
+        Warning: DynamoDB doesn't have a built-in clear mechanism, so we scan and delete all
+        items manually. Pagination is handled via ``LastEvaluatedKey`` so tables larger than
+        the ~1 MB scan page limit are cleared completely.
         """
         logger.info("Clearing cache.", cache_table=self.table_name)
-        scan = self.table.scan()
+        scan_kwargs: ScanInputTableScanTypeDef = {
+            "ProjectionExpression": "#k",
+            "ExpressionAttributeNames": {"#k": "key"},
+        }
         with self.table.batch_writer() as batch:
-            for item in scan["Items"]:
-                batch.delete_item(Key={"key": item["key"]})
+            while True:
+                response = self.table.scan(**scan_kwargs)
+                for item in response.get("Items", []):
+                    batch.delete_item(Key={"key": item["key"]})
+                if "LastEvaluatedKey" not in response:
+                    break
+                scan_kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
 
     def _hit(self, key: str) -> bool:
         cache_key = self._key(key)

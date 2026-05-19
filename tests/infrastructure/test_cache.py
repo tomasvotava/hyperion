@@ -306,3 +306,44 @@ def test_stats_overwrite_counts_each_set(instance: Cache) -> None:
     after = instance.stats
     assert (after - before).get("sets") == 2
     assert instance.get("k") == "v2"
+
+
+def test_dynamodb_cache_clear_paginates_all_pages(
+    dynamodb_cache: DynamoDBCache,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_clear must follow LastEvaluatedKey until exhausted, not just delete the first page."""
+    page1_items = [{"key": "page1-item-a"}, {"key": "page1-item-b"}]
+    page2_items = [{"key": "page2-item-c"}]
+    last_key = {"key": "page1-item-b"}
+
+    call_count = 0
+
+    def _fake_scan(**kwargs: object) -> dict[str, object]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"Items": page1_items, "LastEvaluatedKey": last_key}
+        return {"Items": page2_items}
+
+    deleted_keys: list[str] = []
+
+    class _FakeBatchWriter:
+        def __enter__(self) -> "_FakeBatchWriter":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def delete_item(self, Key: dict[str, str]) -> None:  # noqa: N803
+            deleted_keys.append(Key["key"])
+
+    monkeypatch.setattr(dynamodb_cache.table, "scan", _fake_scan)
+    monkeypatch.setattr(dynamodb_cache.table, "batch_writer", lambda: _FakeBatchWriter())
+
+    dynamodb_cache._clear()
+
+    assert call_count == 2, "scan must be called twice (once per page)"
+    assert sorted(deleted_keys) == sorted([item["key"] for item in page1_items + page2_items]), (
+        "all items from both pages must be deleted"
+    )
