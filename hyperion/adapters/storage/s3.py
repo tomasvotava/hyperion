@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from asyncio import Semaphore
 from collections.abc import AsyncIterator, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from io import BytesIO
 from typing import IO, TYPE_CHECKING, cast
 
@@ -69,15 +69,22 @@ class S3Storage:
             raise
 
     async def put_async(self, key: str, data: bytes | IO[bytes]) -> None:
-        with ExitStack() as stack:
-            fileobj: IO[bytes] = BytesIO(data) if isinstance(data, bytes) else data
-            stack.callback(fileobj.close)
-            async with self._semaphore(), self._aio_session.client("s3") as s3:
-                try:
-                    await s3.upload_fileobj(fileobj, self._bucket, self._full_key(key))
-                except botocore.exceptions.ClientError:
-                    logger.error("Error when uploading object to S3.", bucket=self._bucket, key=key)
-                    raise
+        # Mirror sync put() ownership: only the BytesIO we create here is
+        # ours to close; a caller-supplied IO[bytes] passes straight
+        # through and is never closed by this adapter (issue #148).
+        if isinstance(data, bytes):
+            with BytesIO(data) as fileobj:
+                await self._upload_fileobj_async(key, fileobj)
+        else:
+            await self._upload_fileobj_async(key, data)
+
+    async def _upload_fileobj_async(self, key: str, fileobj: IO[bytes]) -> None:
+        async with self._semaphore(), self._aio_session.client("s3") as s3:
+            try:
+                await s3.upload_fileobj(fileobj, self._bucket, self._full_key(key))
+            except botocore.exceptions.ClientError:
+                logger.error("Error when uploading object to S3.", bucket=self._bucket, key=key)
+                raise
 
     def get(self, key: str) -> bytes:
         try:
