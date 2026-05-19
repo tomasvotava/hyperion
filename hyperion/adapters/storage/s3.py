@@ -105,9 +105,7 @@ class S3Storage:
         pagination_config: PaginatorConfigTypeDef = {}
         full_prefix = self._full_key(prefix)
         logger.debug("Listing S3 bucket contents.", bucket=self._bucket, prefix=full_prefix)
-        for response in paginator.paginate(
-            Bucket=self._bucket, Prefix=full_prefix, PaginationConfig=pagination_config
-        ):
+        for response in paginator.paginate(Bucket=self._bucket, Prefix=full_prefix, PaginationConfig=pagination_config):
             if "Contents" not in response:
                 continue
             for s3_object in response["Contents"]:
@@ -127,18 +125,26 @@ class S3Storage:
         self._client.delete_object(Bucket=self._bucket, Key=self._full_key(key))
 
     def get_attributes(self, key: str) -> ObjectAttributes:
+        """Return metadata for *key* via ``head_object``.
+
+        .. note::
+            For multipart uploads, ``head_object`` returns a composite ETag
+            (``"<md5>-<part_count>"``) that is **not** a plain content MD5
+            and differs from the value ``get_object_attributes`` would return.
+            Because this adapter only writes objects through single-part
+            ``upload_fileobj`` calls (see :meth:`put` / :meth:`put_async`),
+            the two APIs are equivalent in practice.  Callers must not treat
+            ``etag`` as a portable content MD5 across backends or upload
+            strategies.
+        """
         try:
-            response = self._client.get_object_attributes(
-                Bucket=self._bucket,
-                Key=self._full_key(key),
-                ObjectAttributes=["ETag", "Checksum", "ObjectParts", "StorageClass", "ObjectSize"],
-            )
+            response = self._client.head_object(Bucket=self._bucket, Key=self._full_key(key))
         except botocore.exceptions.ClientError as error:
             if _is_not_found(error):
                 raise ObjectNotFoundError(key) from error
             raise
         return ObjectAttributes(
             etag=response["ETag"].strip('"'),
-            size=int(response["ObjectSize"]),
+            size=int(response["ContentLength"]),
             last_modified=response["LastModified"],
         )
