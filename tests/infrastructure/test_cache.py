@@ -1,4 +1,5 @@
 import os
+import tempfile
 from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -8,6 +9,7 @@ from time import sleep, time
 import boto3
 import pytest
 
+from hyperion.adapters.cache.filesystem import DEFAULT_LOCAL_FILE_CACHE_DIRNAME
 from hyperion.infrastructure.cache import Cache, CacheStats, CachingError, DynamoDBCache, InMemoryCache, LocalFileCache
 
 DYNAMODB_TABLE = "test-table"
@@ -232,8 +234,12 @@ def test_cache_stats(instance: Cache) -> None:
 
 @pytest.mark.parametrize("local_file_cache_maxsize", [1024], indirect=True)
 def test_local_file_cache_cleanup(local_file_cache_maxsize: LocalFileCache) -> None:
+    # An entry larger than max_size is evicted by size enforcement. Enforcement
+    # now runs eagerly at write time (deferred out of __init__ into
+    # _perform_set), so the oversized write is already gone after set_bytes;
+    # the explicit shrink call is an idempotent re-check.
     local_file_cache_maxsize.set_bytes("large", os.urandom(4096))
-    assert local_file_cache_maxsize.hit("large")
+    assert not local_file_cache_maxsize.hit("large")
     local_file_cache_maxsize.shrink_to_fit_max_size()
     assert not local_file_cache_maxsize.hit("large")
 
@@ -268,23 +274,24 @@ def test_local_file_cache_eviction_oldest_first(
     local_file_cache_maxsize: LocalFileCache,
 ) -> None:
     # Three 1024-byte entries; max_size=3000 forces at least one eviction. The
-    # oldest (lowest mtime) entry must be evicted first. Use os.utime to fix
-    # mtimes explicitly so the test is independent of filesystem time resolution.
+    # oldest (lowest mtime) entry must be evicted first. Size enforcement now
+    # runs eagerly inside _perform_set, so the third write itself triggers the
+    # eviction -- fix each entry's mtime right after it is written (before the
+    # next write) so the ordering is deterministic and independent of
+    # filesystem time resolution.
     cache = local_file_cache_maxsize
+    now = time()
 
-    def _write_and_locate(key: str, value: bytes) -> Path:
+    def _write_and_set_mtime(key: str, value: bytes, mtime: float) -> Path:
         before = set(cache.root_path.iterdir())
         cache.set_bytes(key, value)
-        return (set(cache.root_path.iterdir()) - before).pop()
+        path = (set(cache.root_path.iterdir()) - before).pop()
+        os.utime(path, (mtime, mtime))
+        return path
 
-    oldest_path = _write_and_locate("oldest", os.urandom(1024))
-    middle_path = _write_and_locate("middle", os.urandom(1024))
-    newest_path = _write_and_locate("newest", os.urandom(1024))
-
-    now = time()
-    os.utime(oldest_path, (now - 200, now - 200))
-    os.utime(middle_path, (now - 100, now - 100))
-    os.utime(newest_path, (now, now))
+    _write_and_set_mtime("oldest", os.urandom(1024), now - 200)
+    _write_and_set_mtime("middle", os.urandom(1024), now - 100)
+    _write_and_set_mtime("newest", os.urandom(1024), now)
 
     cache.shrink_to_fit_max_size()
     assert not cache.hit("oldest")
@@ -351,3 +358,69 @@ def test_dynamodb_cache_clear_paginates_all_pages(
     assert sorted(deleted_keys) == sorted([item["key"] for item in page1_items + page2_items]), (
         "all items from both pages must be deleted"
     )
+
+
+def test_open_overwrite_shorter_leaves_no_trailing_bytes(
+    local_file_cache_no_compression: LocalFileCache,
+) -> None:
+    # Regression for #156: rewriting a key via open() with a shorter value
+    # must fully replace it. Append-mode (the old bug) appended; r+ without
+    # truncate would leave trailing bytes ("hello" -> "hi" => "hilo"). Scoped
+    # to the no-compression LocalFileCache -- the only path Edit 4 fixes; the
+    # shared base _open (compression on / DynamoDB / InMemory) persists the
+    # whole buffer via getvalue() and is governed by read-only ports/cache.py.
+    instance = local_file_cache_no_compression
+    instance.set("overwrite-str", "hello")
+    with instance.open("overwrite-str", "str") as file:
+        assert file.read() == "hello"
+        file.seek(0)
+        file.write("hi")
+    assert instance.get("overwrite-str") == "hi"
+
+    instance.set_bytes("overwrite-bytes", b"hello world")
+    with instance.open("overwrite-bytes", "bytes") as file:
+        assert file.read() == b"hello world"
+        file.seek(0)
+        file.write(b"hi")
+    assert instance.get_bytes("overwrite-bytes") == b"hi"
+
+
+def test_local_file_cache_set_cleans_up_temp_file_on_error(
+    local_file_cache_no_compression: LocalFileCache,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression for #156: a crash mid-write (fsync failure) must leave neither
+    # a value file nor a stranded NamedTemporaryFile in the cache root.
+    cache = local_file_cache_no_compression
+    root = cache.root_path
+
+    def _boom(_fd: int) -> None:
+        raise OSError("fsync failed")
+
+    monkeypatch.setattr("hyperion.adapters.cache.filesystem.os.fsync", _boom)
+    with pytest.raises(OSError, match="fsync failed"):
+        cache.set("atomic-key", "value")
+    assert list(root.iterdir()) == []
+    assert cache.get("atomic-key") is None
+
+
+def test_local_file_cache_default_root_is_stable_and_no_scan_on_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression for #157.
+    def _explode_mkdtemp(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("default construction must not call tempfile.mkdtemp()")
+
+    monkeypatch.setattr("hyperion.adapters.cache.filesystem.tempfile.mkdtemp", _explode_mkdtemp)
+
+    a = LocalFileCache(prefix="default-a")
+    b = LocalFileCache(prefix="default-b")
+    expected = Path(tempfile.gettempdir()) / DEFAULT_LOCAL_FILE_CACHE_DIRNAME
+    assert a.root_path == expected
+    assert b.root_path == expected
+
+    def _explode_shrink(self: LocalFileCache) -> None:
+        raise AssertionError("shrink_to_fit_max_size must not run during __init__")
+
+    monkeypatch.setattr(LocalFileCache, "shrink_to_fit_max_size", _explode_shrink)
+    LocalFileCache(prefix="default-c")

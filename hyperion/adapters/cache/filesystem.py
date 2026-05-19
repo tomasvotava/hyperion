@@ -6,6 +6,7 @@ gracefully when ``python-snappy`` is not installed.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 from collections.abc import Iterator
@@ -17,6 +18,11 @@ from hyperion.log import get_logger
 from hyperion.ports.cache import DEFAULT_TTL_SECONDS, Cache, CacheKeyOpenMode
 
 DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
+
+# Stable, namespaced default root under the system temp dir. Using a fixed
+# subdir (instead of tempfile.mkdtemp()) means default-constructed instances
+# share one reusable directory rather than leaking a fresh tmp dir each time.
+DEFAULT_LOCAL_FILE_CACHE_DIRNAME = "hyperion-cache"
 
 logger = get_logger("cache")
 
@@ -34,7 +40,10 @@ class LocalFileCache(Cache):
         use_compression: bool = True,
     ) -> None:
         super().__init__(prefix, hash_keys, default_ttl)
-        self.root_path = root_path or Path(tempfile.mkdtemp())
+        # A stable namespaced dir under the system temp dir is reused across
+        # instances/processes -- unlike tempfile.mkdtemp(), which leaked a
+        # fresh, never-cleaned-up directory per default-constructed instance.
+        self.root_path = root_path or (Path(tempfile.gettempdir()) / DEFAULT_LOCAL_FILE_CACHE_DIRNAME)
         if self.root_path.exists() and not self.root_path.is_dir():
             raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
         self.use_compression = use_compression
@@ -43,7 +52,9 @@ class LocalFileCache(Cache):
         logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
         if not hash_keys:
             logger.warning("When using filesystem cache, it is recommended to hash keys.")
-        self.shrink_to_fit_max_size()
+        # Size enforcement is deferred to write time (see _perform_set). Doing a
+        # full O(n*log n) sorted dir scan in __init__ blocked construction for
+        # large caches.
 
     def _assert_root_path(self) -> None:
         self.root_path.mkdir(parents=True, exist_ok=True)
@@ -85,13 +96,18 @@ class LocalFileCache(Cache):
         key_path = self._key_path(key)
         key_path.touch(exist_ok=True)
         if mode == "str":
-            with key_path.open("a+") as file:
+            with key_path.open("r+") as file:
                 file.seek(0)
                 yield file
+                # r+ does not truncate: a shorter rewrite ("hello" -> "hi")
+                # would otherwise leave trailing bytes ("hilo"). Truncate at
+                # the caller's final position to honour the overwrite contract.
+                file.truncate(file.tell())
         elif mode == "bytes":
-            with key_path.open("a+b") as file:
+            with key_path.open("r+b") as file:
                 file.seek(0)
                 yield file
+                file.truncate(file.tell())
         else:
             raise ValueError(f"Unsupported open mode {mode!r} - 'str' or 'bytes' are supported.")
         if not key_path.stat().st_size:
@@ -102,6 +118,9 @@ class LocalFileCache(Cache):
         if not self.max_size or self.max_size < 0:
             return
         total_size = self.get_total_size()
+        if total_size <= self.max_size:
+            # Cheap O(n) stat sum already done; skip the O(n*log n) sort+evict.
+            return
         keys_ordered = sorted(self.root_path.iterdir(), key=lambda key: key.stat().st_mtime)
         while total_size > self.max_size:
             key_path = keys_ordered.pop(0)
@@ -145,7 +164,24 @@ class LocalFileCache(Cache):
         if isinstance(value, str):
             value = value.encode("utf-8")
         content = self._compress_bytes(value) if self.use_compression else value
-        key_path.write_bytes(content)
+        tmp_path: str | None = None
+        try:
+            # flush + fsync guarantee the bytes hit disk before the atomic rename.
+            with tempfile.NamedTemporaryFile("wb", dir=self.root_path, delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+                tmp_file.write(content)
+                tmp_file.flush()
+                os.fsync(tmp_file.fileno())
+            os.replace(tmp_path, key_path)  # noqa: PTH105 - atomic same-dir replace
+            tmp_path = None  # renamed into place; nothing for the finally to clean up
+        finally:
+            # delete=False: drop the temp file if anything before the rename is
+            # interrupted -- including BaseException (e.g. KeyboardInterrupt).
+            if tmp_path is not None:
+                Path(tmp_path).unlink(missing_ok=True)
+        # Enforce the size bound lazily here (moved out of __init__ to avoid an
+        # O(n*log n) scan on construction).
+        self.shrink_to_fit_max_size()
 
     def _set(self, key: str, value: str) -> None:
         return self._perform_set(key, value)
