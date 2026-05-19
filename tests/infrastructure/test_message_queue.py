@@ -113,13 +113,21 @@ class TestInMemoryQueue:
         queue.send(message)
         assert queue._messages == [message]
 
+    def test_send_assigns_receipt_handle(self) -> None:
+        queue = InMemoryQueue()
+        message = _datalake_message()
+        assert message.receipt_handle is None
+        queue.send(message)
+        assert message.receipt_handle is not None
+
     def test_delete_by_receipt_handle(self) -> None:
         queue = InMemoryQueue()
         message_a = _datalake_message()
         message_b = SourceBackfillMessage(source="s", start_date=datetime.datetime(2025, 2, 1, tzinfo=UTC))
         queue.send(message_a)
         queue.send(message_b)
-        queue.delete(message_a.created.isoformat())
+        assert message_a.receipt_handle is not None
+        queue.delete(message_a.receipt_handle)
         assert queue._messages == [message_b]
 
     def test_delete_missing_handle_is_noop(self) -> None:
@@ -127,6 +135,27 @@ class TestInMemoryQueue:
         queue.send(_datalake_message())
         queue.delete("does-not-exist")
         assert len(queue._messages) == 1
+
+    def test_identical_timestamps_get_distinct_handles(self) -> None:
+        """Regression: two messages with the same created timestamp must get
+        distinct receipt handles so delete() removes exactly one of them."""
+        shared_ts = datetime.datetime(2025, 6, 1, 12, 0, 0, tzinfo=UTC)
+        message_a = _datalake_message()
+        message_a.created = shared_ts
+        message_b = SourceBackfillMessage(
+            source="s",
+            start_date=datetime.datetime(2025, 2, 1, tzinfo=UTC),
+            created=shared_ts,
+        )
+        queue = InMemoryQueue()
+        queue.send(message_a)
+        queue.send(message_b)
+
+        assert message_a.receipt_handle != message_b.receipt_handle
+
+        assert message_a.receipt_handle is not None
+        queue.delete(message_a.receipt_handle)
+        assert queue._messages == [message_b]
 
 
 class TestFileQueue:
