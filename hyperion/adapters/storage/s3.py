@@ -131,11 +131,12 @@ class S3Storage:
             For multipart uploads, ``head_object`` returns a composite ETag
             (``"<md5>-<part_count>"``) that is **not** a plain content MD5
             and differs from the value ``get_object_attributes`` would return.
-            Because this adapter only writes objects through single-part
-            ``upload_fileobj`` calls (see :meth:`put` / :meth:`put_async`),
-            the two APIs are equivalent in practice.  Callers must not treat
-            ``etag`` as a portable content MD5 across backends or upload
-            strategies.
+            :meth:`put` / :meth:`put_async` go through boto3's managed
+            ``upload_fileobj``, which switches to a multipart upload for
+            payloads above ``TransferConfig.multipart_threshold`` (8 MiB by
+            default), so larger objects do get a composite ETag here. Callers
+            must not treat ``etag`` as a portable content MD5 across backends
+            or upload strategies.
         """
         try:
             response = self._client.head_object(Bucket=self._bucket, Key=self._full_key(key))
