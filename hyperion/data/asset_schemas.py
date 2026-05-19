@@ -34,4 +34,4 @@ class PolarsFeatureModel(pa.DataFrameModel):
 
     @classmethod
     def to_polars_schema_definition(cls) -> dict[str, type[polars.DataType] | polars.DataType]:
-        return {field.name: map_pandera_dtype_to_polars(field.dtype) for field in cls.to_schema().columns.values()}
+        return {name: map_pandera_dtype_to_polars(field.dtype) for name, field in cls.to_schema().columns.items()}
