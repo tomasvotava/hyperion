@@ -323,7 +323,11 @@ def test_dynamodb_cache_clear_paginates_all_pages(
         nonlocal call_count
         call_count += 1
         if call_count == 1:
+            assert "ExclusiveStartKey" not in kwargs, "first scan must not carry a cursor"
             return {"Items": page1_items, "LastEvaluatedKey": last_key}
+        assert kwargs.get("ExclusiveStartKey") == last_key, (
+            "subsequent scans must thread the previous page's LastEvaluatedKey as ExclusiveStartKey"
+        )
         return {"Items": page2_items}
 
     deleted_keys: list[str] = []
