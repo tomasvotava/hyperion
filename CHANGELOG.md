@@ -190,6 +190,29 @@ one project. Work through them in order:
   will see feature-store asset keys resolve to the corrected path (see *Catalog
   constructor change* above). Review any tooling that depended on the old path.
 
+## 1.0.1 (2026-05-19)
+
+### Fix
+
+- **queue**: clean up FileQueue._flush temp file on BaseException via try/finally
+- **keyval**: clean up _set_raw temp file on BaseException via try/finally
+- **keyval**: make FilesystemStore._set_raw durable and leak-free
+- **cache**: DynamoDBCache._clear only clears the first scan page
+- **queue**: make FileQueue._flush durable and leak-free
+- **queue**: FileQueue._flush is not atomic across filesystems
+- **queue**: InMemoryQueue receipt handles collide on identical timestamps
+- **geo**: honor get_nearest threshold and guard meters_to_degrees at the poles
+- **data**: preserve schema column names and clarify dtype error in pandera↔polars helpers
+
+### Refactor
+
+- **storage**: use head_object for S3Storage.get_attributes
+
+### Perf
+
+- **keyval**: skip redundant unlink on FilesystemStore._set_raw success path
+- **queue**: skip redundant unlink on FileQueue._flush success path
+
 ## 1.0.0 (2026-05-18)
 
 ### BREAKING CHANGE
