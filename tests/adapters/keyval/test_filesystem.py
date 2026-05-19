@@ -112,3 +112,19 @@ def test_compression_roundtrip(tmp_path: Path, compression: str | None) -> None:
     payload = "hello-" * 200
     store.set("k", payload)
     assert store.get("k") == payload
+
+
+def test_set_cleans_up_temp_file_on_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "kv"
+    store = FilesystemStore(root)
+
+    def _boom(_fd: int) -> None:
+        raise OSError("fsync failed")
+
+    # fsync runs after the temp file is created/written but before the rename.
+    monkeypatch.setattr("hyperion.adapters.keyval.filesystem.os.fsync", _boom)
+    with pytest.raises(OSError, match="fsync failed"):
+        store.set("k", "v")
+    # The failed write must leave neither a value file nor a stranded temp file.
+    assert list(root.iterdir()) == []
+    assert store.get("k") is None
