@@ -241,6 +241,33 @@ class TestFileQueue:
         siblings = list(tmp_path.iterdir())
         assert siblings == [queue_path]
 
+    def test_flush_cleans_up_temp_file_on_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        queue_path = tmp_path / "queue.json"
+        queue = FileQueue(queue_path)
+
+        def _boom(*_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("serialization failed")
+
+        monkeypatch.setattr("hyperion.adapters.queue.filesystem.json.dump", _boom)
+        with pytest.raises(RuntimeError, match="serialization failed"), queue:
+            queue.send(_datalake_message())
+        # The failed flush must leave neither a queue file nor a stranded temp file.
+        assert list(tmp_path.iterdir()) == []
+
+    def test_flush_roundtrips_non_ascii_payload(self, tmp_path: Path) -> None:
+        queue_path = tmp_path / "queue.json"
+        queue = FileQueue(queue_path)
+        message = SourceBackfillMessage(
+            source="Pňačšľ-Žřáböľ",  # non-ASCII: would corrupt under a non-utf-8 default encoding
+            start_date=datetime.datetime(2025, 2, 1, tzinfo=UTC),
+        )
+        with queue:
+            queue.send(message)
+        loaded = list(FileQueue.iter_messages_from_file(queue_path))
+        assert len(loaded) == 1
+        assert isinstance(loaded[0], SourceBackfillMessage)
+        assert loaded[0].source == "Pňačšľ-Žřáböľ"
+
 
 class TestSQSQueue:
     @pytest.fixture
