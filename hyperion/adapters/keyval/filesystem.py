@@ -65,12 +65,13 @@ class FilesystemStore(KeyValueStore):
                 tmp_file.flush()
                 os.fsync(tmp_file.fileno())
             os.replace(tmp_path, key_path)  # noqa: PTH105 - atomic same-dir replace
-        except Exception:
-            # delete=False means a failure before the rename would otherwise
-            # strand the temp file in root_path.
+        finally:
+            # delete=False: drop the temp file if anything before the rename is
+            # interrupted -- including BaseException (e.g. KeyboardInterrupt).
+            # On success os.replace already moved it, so unlink is a
+            # missing_ok no-op.
             if tmp_path is not None:
                 Path(tmp_path).unlink(missing_ok=True)
-            raise
 
     def _delete_raw(self, hashed_key: str) -> None:
         self._path(hashed_key).unlink(missing_ok=True)
