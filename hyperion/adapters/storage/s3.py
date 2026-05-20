@@ -69,13 +69,11 @@ class S3Storage:
             raise
 
     async def put_async(self, key: str, data: bytes | IO[bytes]) -> None:
-        # Mirror sync put() ownership: only the BytesIO we create here is
-        # ours to close; a caller-supplied IO[bytes] passes straight
-        # through and is never closed by this adapter (issue #148).
         if isinstance(data, bytes):
             with BytesIO(data) as fileobj:
                 await self._upload_fileobj_async(key, fileobj)
         else:
+            # Caller-owned stream: passed through untouched, never closed here.
             await self._upload_fileobj_async(key, data)
 
     async def _upload_fileobj_async(self, key: str, fileobj: IO[bytes]) -> None:

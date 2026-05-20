@@ -19,7 +19,7 @@ from hyperion.adapters.storage.memory import MemoryStorage
 from hyperion.adapters.storage.s3 import S3Storage
 from hyperion.ports.storage import ObjectNotFoundError, StoragePort
 
-_LARGE_PAYLOAD = b"hyperion-storage-stream-test\n" * 200_000  # ~5.6 MiB
+_LARGE_PAYLOAD = b"hyperion-storage-stream-test\n" * 200_000
 
 
 @pytest.fixture
@@ -150,7 +150,7 @@ async def test_s3_put_async_does_not_close_caller_stream() -> None:
 
     buf = BytesIO(b"caller-owned-stream")
     await storage.put_async("stream/obj.bin", buf)
-    assert not buf.closed  # issue #148: caller-owned stream must stay open
+    assert not buf.closed
     assert storage.get("stream/obj.bin") == b"caller-owned-stream"
 
     await storage.put_async("bytes/obj.bin", b"async-bytes")

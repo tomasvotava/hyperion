@@ -663,8 +663,6 @@ class _SlowSerializer:
         fastavro.writer(fp, schema=schema, records=list(records), metadata=metadata)
 
     def read(self, fp: Any) -> Any:
-        # Delegates to fastavro so the existing-style round-trip assertion can
-        # decode what write() produced (mirrors AvroSerializer.read).
         yield from fastavro.reader(fp)
 
 
@@ -855,7 +853,6 @@ class TestRepartitionDoesNotBlockLoop:
         assert serializer.write_thread != threading.get_ident(), "writer.write ran on the event-loop thread"
         assert ticks >= 10, f"event loop was blocked during repartition writes (only {ticks} ticks)"
 
-        # Behavioural equivalence: same partitions/rows as the canonical test.
         partitions = sorted(catalog.iter_datalake_partitions("repart"), key=lambda asset: asset.date)
         assert [p.date for p in partitions] == [
             datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),

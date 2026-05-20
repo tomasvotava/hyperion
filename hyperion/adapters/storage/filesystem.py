@@ -20,7 +20,7 @@ from hyperion.ports.storage import ObjectAttributes, ObjectNotFoundError
 
 logger = get_logger("adapters.storage.filesystem")
 
-_HASH_CHUNK_SIZE = 64 * 1024  # 64 KiB read window for streaming md5.
+_HASH_CHUNK_SIZE = 64 * 1024
 
 
 class FilesystemStorage:
@@ -42,8 +42,6 @@ class FilesystemStorage:
         if isinstance(data, bytes):
             target.write_bytes(data)
         else:
-            # Stream the caller's file-like input without materializing it
-            # in memory; the caller owns and closes their stream (#147/#148).
             with target.open("wb") as fh:
                 shutil.copyfileobj(data, fh)
 
