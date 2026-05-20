@@ -70,6 +70,29 @@ async def test_aiter_unsupported() -> None:
         await collect_test(None)
 
 
+async def test_aiter_callable_sync() -> None:
+    assert await collect_test(lambda: [0, 1, 2, 3, 4]) == {0, 1, 2, 3, 4}
+
+
+async def test_aiter_callable_def_sync() -> None:
+    def factory() -> list[int]:
+        return [0, 1, 2, 3, 4]
+
+    assert await collect_test(factory) == {0, 1, 2, 3, 4}
+
+
+async def test_aiter_callable_async() -> None:
+    def factory() -> AsyncList:
+        return AsyncList([0, 1, 2, 3, 4])
+
+    assert await collect_test(factory) == {0, 1, 2, 3, 4}
+
+
+async def test_aiter_callable_returning_noniterable() -> None:
+    with pytest.raises(TypeError, match=r"Provided value cannot be iterated over."):
+        await collect_test(lambda: (lambda: [1, 2, 3]))
+
+
 @pytest.mark.parametrize(("maxsize", "max_duration", "min_duration"), [(0, 2, 1), (2, 4, 2)])
 async def test_async_task_queue(maxsize: int, max_duration: int, min_duration: int) -> None:
     class _Cororun:

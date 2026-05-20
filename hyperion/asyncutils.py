@@ -31,6 +31,14 @@ async def aiter_any(
         asyncgen = iter_async(iterable)
     elif inspect.isgeneratorfunction(iterable):
         asyncgen = iter_async(iterable())
+    elif callable(iterable):
+        result = iterable()
+        if inspect.isasyncgen(result) or isinstance(result, AsyncIterable):
+            asyncgen = result
+        elif inspect.isgenerator(result) or isinstance(result, Iterable):
+            asyncgen = iter_async(result)
+        else:
+            raise TypeError("Provided value cannot be iterated over.")
     else:
         raise TypeError("Provided value cannot be iterated over.")
     async for item in asyncgen:
