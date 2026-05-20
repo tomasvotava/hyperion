@@ -190,6 +190,35 @@ one project. Work through them in order:
   will see feature-store asset keys resolve to the corrected path (see *Catalog
   constructor change* above). Review any tooling that depended on the old path.
 
+## Unreleased — v2.0 (in progress)
+
+The v2.0 release is being assembled on the `v2.0` long-lived branch (see
+umbrella epic #193) and will land as one release PR once all waves are
+complete. Sections accumulate here per wave.
+
+### Wave 1 — resource & contract fixes
+
+#### Fix
+
+- **asyncutils**: handle plain callables in `aiter_any` (closes #203). The
+  signature advertised `Callable[[], Iterable[T] | AsyncIterable[T]]` but the
+  body only handled `isasyncgenfunction` / `isgeneratorfunction`, so a plain
+  `lambda: [1, 2, 3]` raised `TypeError`. One-hop callable branch added.
+- **catalog**: bound `AssetRepartitioner` open writers with an LRU (default
+  256, configurable via `max_open_writers`); raise on re-entered context
+  instead of silently clobbering `_state`; mirror the `BaseException`
+  tempfile-cleanup guard from `_serialize_asset_to_tempfile` (closes #202).
+  A 5-year hourly repartition no longer leaks ~43k file descriptors.
+
+#### Perf
+
+- **catalog**: keep small avro payloads in memory instead of the
+  write-close-reopen disk round-trip (closes #201). New
+  `spool_threshold_bytes` Catalog kwarg (default 8 MiB); fastavro now writes
+  into a `tempfile.SpooledTemporaryFile` that stays in memory below the
+  threshold and rolls over to disk transparently during write — large
+  payloads no longer get double-buffered in RAM.
+
 ## 1.0.2 (2026-05-20)
 
 ### Fix

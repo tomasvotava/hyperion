@@ -2,6 +2,7 @@ import datetime
 import io
 import json
 import re
+import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -860,3 +861,358 @@ class TestRepartitionDoesNotBlockLoop:
         ]
         assert {row["id"] for row in catalog.retrieve_asset(partitions[0])} == {"a", "b"}
         assert {row["id"] for row in catalog.retrieve_asset(partitions[1])} == {"c"}
+
+
+# -----------------------------------------------------------------------------
+# Spool-to-disk threshold (issue #201). Small payloads must round-trip through a
+# BytesIO buffer instead of NamedTemporaryFile; only oversized payloads spill to
+# disk.
+# -----------------------------------------------------------------------------
+
+
+def _spool_schema_dir(tmp_path: Path) -> Path:
+    schema_dir = tmp_path / "schemas" / "data_lake"
+    schema_dir.mkdir(parents=True)
+    schema = {"type": "record", "name": "Spool", "fields": [{"name": "id", "type": "string"}]}
+    (schema_dir / "spoolasset.v1.avro.json").write_text(json.dumps(schema))
+    return tmp_path / "schemas"
+
+
+def test_serialize_spool_small_payload_stays_in_memory(tmp_path: Path) -> None:
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    prepared = catalog._serialize_asset_to_tempfile(asset, [{"id": "tiny"}])
+    try:
+        assert isinstance(prepared, tempfile.SpooledTemporaryFile)
+        assert prepared._rolled is False, "small payload should not roll to disk"  # type: ignore[attr-defined]
+        assert prepared.tell() == 0, "buffer should be seeked to 0 ready for upload"
+        assert prepared.read(4) != b""
+    finally:
+        prepared.close()
+
+
+def test_serialize_spool_large_payload_promotes_to_disk(tmp_path: Path) -> None:
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+        spool_threshold_bytes=512,
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    # Many records of incompressible (random-looking) ids easily clear 512 bytes
+    # even after deflate.
+    records = [{"id": f"row-{i:08d}-{uuid4().hex}"} for i in range(200)]
+    prepared = catalog._serialize_asset_to_tempfile(asset, records)
+    try:
+        assert isinstance(prepared, tempfile.SpooledTemporaryFile)
+        assert prepared._rolled is True, "payload over threshold should roll to disk"  # type: ignore[attr-defined]
+        prepared.seek(0, 2)
+        assert prepared.tell() > 512
+        prepared.seek(0)
+    finally:
+        prepared.close()
+
+
+async def test_serialize_spool_round_trip_small(tmp_path: Path) -> None:
+    import tempfile as _tempfile
+
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    records = [{"id": "alpha"}, {"id": "beta"}]
+    tmp_root = Path(_tempfile.gettempdir())
+    before = set(tmp_root.iterdir())
+    await catalog.store_asset_async(asset, records, notify=False)
+    # In-memory path should leave no temp-file droppings.
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(asset)) == records
+    # Sync path goes through the same in-memory branch via _prepare_asset_storage.
+    sync_asset = DataLakeAsset("spoolasset", utcnow() + datetime.timedelta(seconds=1))
+    before = set(tmp_root.iterdir())
+    catalog.store_asset(sync_asset, records, notify=False)
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(sync_asset)) == records
+
+
+async def test_serialize_spool_round_trip_large(tmp_path: Path) -> None:
+    import tempfile as _tempfile
+
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+        spool_threshold_bytes=512,
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    records = [{"id": f"row-{i:08d}-{uuid4().hex}"} for i in range(200)]
+    tmp_root = Path(_tempfile.gettempdir())
+    before = set(tmp_root.iterdir())
+    await catalog.store_asset_async(asset, records, notify=False)
+    # On-disk path cleans up its own temp file after upload.
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(asset)) == records
+    sync_asset = DataLakeAsset("spoolasset", utcnow() + datetime.timedelta(seconds=1))
+    before = set(tmp_root.iterdir())
+    catalog.store_asset(sync_asset, records, notify=False)
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(sync_asset)) == records
+
+
+class _OpenFdTracker:
+    """Counts currently-open tempfile fds that look like avro repartition tempfiles."""
+
+    @staticmethod
+    def count_open_repartition_tempfiles() -> int:
+        import tempfile as _tempfile
+
+        fd_root = Path("/proc/self/fd")
+        if not fd_root.exists():  # pragma: no cover - non-Linux
+            return -1
+        tempdir = _tempfile.gettempdir()
+        count = 0
+        for entry in fd_root.iterdir():
+            try:
+                target = entry.resolve(strict=False).as_posix()
+            except OSError:  # pragma: no cover - racing fd close
+                continue
+            if target.startswith(tempdir) and "tmp" in Path(target).name:
+                count += 1
+        return count
+
+
+class _FdRecordingStreamWriter:
+    """Wraps a real fastavro stream writer; records a max-open-fd watermark per write."""
+
+    def __init__(self, inner: AvroStreamWriter, owner: "_FdRecordingSerializer") -> None:
+        self._inner = inner
+        self._owner = owner
+
+    def write(self, record: dict[str, Any]) -> None:
+        current = _OpenFdTracker.count_open_repartition_tempfiles()
+        if current > self._owner.max_observed_open_fds:
+            self._owner.max_observed_open_fds = current
+        self._inner.write(record)
+
+    def dump(self) -> None:
+        self._inner.dump()
+
+
+class _FdRecordingSerializer(AvroSerializer):
+    """Watches how many repartition tempfiles are open during each per-record write."""
+
+    def __init__(self) -> None:
+        self.max_observed_open_fds = 0
+
+    def streaming_writer(self, fp: Any, schema: dict[str, Any], metadata: dict[str, str]) -> AvroStreamWriter:
+        return _FdRecordingStreamWriter(super().streaming_writer(fp, schema, metadata), self)
+
+
+class TestAssetRepartitionerHardening:
+    async def test_repartitioner_lru_evicts_when_over_max_open_writers(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_lru.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        serializer = _FdRecordingSerializer()
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+            serializer=serializer,
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        records = [
+            {"id": "p1-a", "timestamp": datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.UTC)},
+            {"id": "p2-a", "timestamp": datetime.datetime(2025, 1, 2, 8, tzinfo=datetime.UTC)},
+            {"id": "p3-a", "timestamp": datetime.datetime(2025, 1, 3, 8, tzinfo=datetime.UTC)},
+            {"id": "p1-b", "timestamp": datetime.datetime(2025, 1, 1, 9, tzinfo=datetime.UTC)},
+            {"id": "p2-b", "timestamp": datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.UTC)},
+            {"id": "p3-b", "timestamp": datetime.datetime(2025, 1, 3, 9, tzinfo=datetime.UTC)},
+        ]
+        source_asset = DataLakeAsset("repart_lru", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp", max_open_writers=2)
+        await repartitioner.repartition(records)
+
+        assert serializer.max_observed_open_fds <= 2, (
+            f"LRU bound violated: observed {serializer.max_observed_open_fds} open tempfiles"
+        )
+        partitions = sorted(catalog.iter_datalake_partitions("repart_lru"), key=lambda asset: asset.date)
+        assert len(partitions) == 3
+        ids_per_partition = [{row["id"] for row in catalog.retrieve_asset(p)} for p in partitions]
+        assert ids_per_partition == [{"p1-a", "p1-b"}, {"p2-a", "p2-b"}, {"p3-a", "p3-b"}]
+
+    def test_repartitioner_reentry_raises(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_reentry.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        asset = DataLakeAsset("repart_reentry", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+        repartitioner = AssetRepartitioner(catalog, asset, "d", "timestamp")
+
+        with repartitioner, pytest.raises(RuntimeError, match="not reentrant"):
+            repartitioner.__enter__()
+
+        # Once the context exits cleanly, a fresh `with` is allowed.
+        with repartitioner:
+            pass
+
+    def test_repartitioner_baseexception_cleanup_in_get_handler(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import tempfile as _tempfile
+
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_be.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        source_asset = DataLakeAsset("repart_be", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp")
+
+        tmp_root = Path(_tempfile.gettempdir())
+        tempfiles_before = set(tmp_root.iterdir())
+
+        boom_calls = {"n": 0}
+        real_streaming_writer = catalog._serializer.streaming_writer
+
+        def exploding_streaming_writer(*args: Any, **kwargs: Any) -> Any:
+            boom_calls["n"] += 1
+            raise KeyboardInterrupt("simulated SIGINT after NamedTemporaryFile() and before insert")
+
+        monkeypatch.setattr(catalog._serializer, "streaming_writer", exploding_streaming_writer)
+
+        with repartitioner:
+            with pytest.raises(KeyboardInterrupt):
+                repartitioner._get_writer(datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+            # Reinstate the real writer so __exit__ doesn't double-fault on already-clean state.
+            monkeypatch.setattr(catalog._serializer, "streaming_writer", real_streaming_writer)
+
+        assert boom_calls["n"] == 1
+        # No partition state was inserted, nothing to leak.
+        assert repartitioner._partitions == {}
+        assert not repartitioner._open_lru
+        leaked = set(tmp_root.iterdir()) - tempfiles_before
+        assert leaked == set(), f"BaseException path leaked tempfile(s): {leaked!r}"
+
+    async def test_repartitioner_round_trip_after_eviction(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_rt.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        records = [
+            {"id": "a1", "timestamp": datetime.datetime(2025, 1, 1, 1, tzinfo=datetime.UTC)},
+            {"id": "a2", "timestamp": datetime.datetime(2025, 1, 1, 2, tzinfo=datetime.UTC)},
+            {"id": "b1", "timestamp": datetime.datetime(2025, 1, 2, 1, tzinfo=datetime.UTC)},
+            # The next write to partition A must reopen its file after eviction by B.
+            {"id": "a3", "timestamp": datetime.datetime(2025, 1, 1, 3, tzinfo=datetime.UTC)},
+            {"id": "b2", "timestamp": datetime.datetime(2025, 1, 2, 2, tzinfo=datetime.UTC)},
+            {"id": "a4", "timestamp": datetime.datetime(2025, 1, 1, 4, tzinfo=datetime.UTC)},
+        ]
+        source_asset = DataLakeAsset("repart_rt", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp", max_open_writers=1)
+        await repartitioner.repartition(records)
+
+        partitions = sorted(catalog.iter_datalake_partitions("repart_rt"), key=lambda asset: asset.date)
+        assert [p.date for p in partitions] == [
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+            datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC),
+        ]
+        a_rows = {row["id"] for row in catalog.retrieve_asset(partitions[0])}
+        b_rows = {row["id"] for row in catalog.retrieve_asset(partitions[1])}
+        assert a_rows == {"a1", "a2", "a3", "a4"}
+        assert b_rows == {"b1", "b2"}
+
+    def test_repartitioner_exit_continues_after_close_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mid-loop close failure must not abandon the rest of the open writers."""
+        import tempfile as _tempfile
+
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_exit.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        source_asset = DataLakeAsset("repart_exit", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp")
+        partition_a = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        partition_b = datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC)
+
+        # Patch dump() on the first writer encountered to raise; the second
+        # partition's writer must still be closed and its tempfile unlinked.
+        original_dump = AvroStreamWriter.dump
+        sabotaged: dict[str, bool] = {"done": False}
+
+        def maybe_exploding_dump(self: AvroStreamWriter) -> None:
+            if not sabotaged["done"]:
+                sabotaged["done"] = True
+                raise OSError("simulated disk failure during dump()")
+            original_dump(self)
+
+        monkeypatch.setattr(AvroStreamWriter, "dump", maybe_exploding_dump)
+
+        tmp_root = Path(_tempfile.gettempdir())
+        before = set(tmp_root.iterdir())
+
+        with repartitioner:
+            writer_a = repartitioner._get_writer(partition_a)
+            writer_a.write({"id": "a1", "timestamp": partition_a})
+            writer_b = repartitioner._get_writer(partition_b)
+            writer_b.write({"id": "b1", "timestamp": partition_b})
+            # _finalize_partitions would close both; but __exit__ also closes
+            # whatever is still open. Skip the finalize call so __exit__ owns
+            # both partitions and exercises the per-partition exception guard.
+            paths_in_play = [entry.path for entry in repartitioner._partitions.values()]
+
+        # __exit__ must have cleared all state and unlinked every tempfile,
+        # even though one writer.dump() raised mid-loop.
+        assert repartitioner._partitions == {}
+        assert not repartitioner._open_lru
+        leaked = set(tmp_root.iterdir()) - before
+        assert leaked == set(), f"__exit__ leaked tempfile(s) after mid-loop failure: {leaked!r}"
+        for path in paths_in_play:
+            assert not path.exists(), f"partition tempfile {path} survived __exit__"

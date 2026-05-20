@@ -1,10 +1,12 @@
 """The data catalog."""
 
 import asyncio
+import dataclasses
 import datetime
 import re
 import shutil
 import tempfile
+from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -166,6 +168,7 @@ class Catalog:
     """
 
     _ASSET_TYPES: ClassVar[tuple[AssetType, ...]] = ("data_lake", "feature", "persistent_store")
+    DEFAULT_SPOOL_THRESHOLD_BYTES: ClassVar[int] = 8 * 1024 * 1024
 
     def __init__(
         self,
@@ -175,6 +178,7 @@ class Catalog:
         cache: "Cache | None" = None,
         schema_store: "SchemaStore | None" = None,
         serializer: AvroSerializer | None = None,
+        spool_threshold_bytes: int = DEFAULT_SPOOL_THRESHOLD_BYTES,
     ) -> None:
         """Initialize the catalog.
 
@@ -188,6 +192,10 @@ class Catalog:
             cache (Cache, optional): The cache to use for storing assets for quicker re-retrieval. Defaults to None.
             schema_store (SchemaStore, optional): The schema store. Defaults to ``SchemaStore.from_config()``.
             serializer (AvroSerializer, optional): The avro serializer. Defaults to a fresh ``AvroSerializer``.
+            spool_threshold_bytes (int, optional): Upper bound (inclusive) for in-memory
+                avro serialization on the store-asset path. Payloads at or below this size
+                upload from a BytesIO buffer; larger payloads are promoted to an on-disk
+                temp file. Defaults to 8 MiB.
         """
         if isinstance(storage, Mapping):
             missing = [asset_type for asset_type in self._ASSET_TYPES if asset_type not in storage]
@@ -206,6 +214,7 @@ class Catalog:
             )
 
         self.schema_store = schema_store or SchemaStore.from_config()
+        self.spool_threshold_bytes = spool_threshold_bytes
 
     def _resolve_storage(self, asset: AssetProtocol | type[AssetProtocol]) -> StoragePort:
         try:
@@ -229,39 +238,42 @@ class Catalog:
 
     def _serialize_asset_to_tempfile(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
-    ) -> Path:
-        """Serialize ``data`` for ``asset`` into a closed temp file and return its path.
+    ) -> tempfile.SpooledTemporaryFile[bytes]:
+        """Serialize ``data`` for ``asset`` into a spooled tempfile, seeked to 0.
 
-        The caller owns the returned path and is responsible for deleting it.
+        Payloads up to ``spool_threshold_bytes`` stay in memory; larger payloads
+        roll over to disk transparently *during* fastavro's write — the
+        serializer never has to fit the whole payload in RAM. The caller owns
+        the returned handle and must close it.
         """
         schema = (
             self.schema_store.get_asset_schema(asset)
             if schema_path is None
             else self.schema_store.get_schema_from_path(schema_path)
         )
-        file = tempfile.NamedTemporaryFile("+wb", delete=False)  # noqa: SIM115
-        path = Path(file.name)
+        spool: tempfile.SpooledTemporaryFile[bytes] = tempfile.SpooledTemporaryFile(  # noqa: SIM115
+            max_size=self.spool_threshold_bytes, mode="w+b"
+        )
         try:
-            logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
-            self._serializer.write(file, schema, data, asset.to_metadata())
-            logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
+            logger.info("Serializing asset into spooled tempfile.", asset=asset)
+            self._serializer.write(spool, schema, data, asset.to_metadata())
         except BaseException:
-            file.close()
-            path.unlink(missing_ok=True)
+            spool.close()
             raise
-        file.close()
-        return path
+        size = spool.tell()
+        spool.seek(0)
+        logger.info("Avro serialization complete.", asset=asset, size=size)
+        return spool
 
     @contextmanager
     def _prepare_asset_storage(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
     ) -> Iterator[IO[bytes]]:
-        path = self._serialize_asset_to_tempfile(asset, data, schema_path)
+        prepared = self._serialize_asset_to_tempfile(asset, data, schema_path)
         try:
-            with path.open("rb") as file:
-                yield file
+            yield prepared
         finally:
-            path.unlink(missing_ok=True)
+            prepared.close()
 
     async def store_asset_async(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True, schema_path: str | None = None
@@ -274,12 +286,11 @@ class Catalog:
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
         logger.info("Preparing asset storage.", asset=asset)
-        prepared_path = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
+        prepared = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
         try:
-            with prepared_path.open("rb") as file:
-                await self._resolve_storage(asset).put_async(asset.get_path(), file)
+            await self._resolve_storage(asset).put_async(asset.get_path(), prepared)
         finally:
-            prepared_path.unlink(missing_ok=True)
+            prepared.close()
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
 
@@ -534,8 +545,25 @@ class Catalog:
         await repartitioner.repartition(data)
 
 
+@dataclasses.dataclass
+class _PartitionEntry(Generic[RepartitionableAsset]):
+    """Per-partition state used by :class:`AssetRepartitioner`.
+
+    ``path`` is created once via ``NamedTemporaryFile(delete=False)`` and lives for the
+    full repartition. ``open_handle`` is populated only while the partition is in the
+    bounded LRU of currently-open writers; eviction sets it back to ``None`` and a
+    later write reopens the same path in ``a+b`` so fastavro resumes the container.
+    """
+
+    asset: RepartitionableAsset
+    path: Path
+    open_handle: tuple[IO[bytes], AvroStreamWriter] | None = None
+
+
 class AssetRepartitioner(Generic[RepartitionableAsset]):
     """A class to repartition a data lake asset based on a time resolution unit."""
+
+    DEFAULT_MAX_OPEN_WRITERS: ClassVar[int] = 256
 
     def __init__(
         self,
@@ -543,6 +571,7 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         asset: RepartitionableAsset,
         granularity: TimeResolutionUnit,
         date_attribute: str = "timestamp",
+        max_open_writers: int = DEFAULT_MAX_OPEN_WRITERS,
     ) -> None:
         """Initialize the repartitioner.
 
@@ -551,22 +580,59 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
             asset (DataLakeAsset | FeatureAsset): The asset to repartition.
             granularity (TimeResolutionUnit): The time resolution unit to use.
             date_attribute (str, optional): The date attribute to use. Defaults to "timestamp".
+            max_open_writers (int, optional): Maximum number of avro stream writers (and
+                therefore tempfile descriptors) kept open concurrently. Defaults to 256.
+                When more partitions are touched than this, the least-recently-used
+                writer is flushed + closed; a later write to that partition reopens
+                its file in ``a+b`` so fastavro resumes the same container.
         """
+        if max_open_writers < 1:
+            raise ValueError(f"max_open_writers must be >= 1, got {max_open_writers!r}.")
+
         self.catalog = catalog
         self.asset = asset
         self.granularity = granularity
         self.date_attribute = date_attribute
+        self.max_open_writers = max_open_writers
         self._partition_name = "date" if isinstance(self.asset, DataLakeAsset) else "timestamp"
 
-        self._state: dict[datetime.datetime, tuple[IO[bytes], RepartitionableAsset, AvroStreamWriter]] = {}
+        self._partitions: dict[datetime.datetime, _PartitionEntry[RepartitionableAsset]] = {}
+        # LRU of partitions with a live (file, writer); the *value* is unused, the
+        # OrderedDict is only consulted for ordering + membership.
+        self._open_lru: OrderedDict[datetime.datetime, None] = OrderedDict()
+        self._entered = False
 
-    def __enter__(self) -> None:
-        self._state = {}
+    def __enter__(self) -> "AssetRepartitioner[RepartitionableAsset]":
+        if self._entered:
+            raise RuntimeError("AssetRepartitioner context is not reentrant")
+        self._entered = True
+        return self
 
     def __exit__(self, *args: Any) -> None:
-        for file, _, __ in self._state.values():
-            logger.info("Closing temporary file.", path=file.name)
-            file.close()
+        try:
+            # Isolate per-partition cleanup failures so one bad writer / disk
+            # error doesn't leak the rest of the open handles or tempfiles.
+            for partition_date in list(self._open_lru):
+                try:
+                    self._close_partition(partition_date, evict=False)
+                except Exception:
+                    logger.exception(
+                        "Failed to close partition writer during repartitioner exit.",
+                        partition_date=partition_date.isoformat(),
+                    )
+            self._open_lru.clear()
+            for partition_date, entry in self._partitions.items():
+                try:
+                    entry.path.unlink(missing_ok=True)
+                except Exception:
+                    logger.exception(
+                        "Failed to unlink partition tempfile during repartitioner exit.",
+                        partition_date=partition_date.isoformat(),
+                        path=entry.path.as_posix(),
+                    )
+            self._partitions.clear()
+        finally:
+            self._entered = False
 
     def _create_partition_asset(self, partition_date: datetime.datetime) -> RepartitionableAsset:
         if isinstance(self.asset, DataLakeAsset):
@@ -584,21 +650,93 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
             )
         raise TypeError(f"Unsupported asset type {type(self.asset)!r}.")
 
-    def _get_handler(
-        self, partition_date: datetime.datetime
-    ) -> tuple[IO[bytes], RepartitionableAsset, AvroStreamWriter]:
-        if partition_date in self._state:
-            return self._state[partition_date]
-        logger.info("Creating a new handler for partition date.", partition_date=partition_date.isoformat())
-        file = tempfile.NamedTemporaryFile("+wb")  # noqa: SIM115
-        logger.info(f"Partition will be temporarily stored in {file.name!r}.", path=file.name)
-        asset = self._create_partition_asset(partition_date)
-        writer = self.catalog._serializer.streaming_writer(
-            file, self.catalog.schema_store.get_asset_schema(asset), asset.to_metadata()
-        )
-        handler = (file, asset, writer)
-        self._state[partition_date] = handler
-        return handler
+    def _close_partition(self, partition_date: datetime.datetime, *, evict: bool) -> None:
+        """Flush + close the open writer for ``partition_date``.
+
+        With ``evict=True`` the file's bytes are kept on disk so a later write can
+        reopen it; with ``evict=False`` we additionally drop the dict slot.
+        """
+        entry = self._partitions[partition_date]
+        if entry.open_handle is None:
+            return
+        file, writer = entry.open_handle
+        try:
+            writer.dump()
+        finally:
+            file.close()
+            entry.open_handle = None
+        if evict:
+            logger.info(
+                "Evicting open avro writer to stay within max_open_writers.",
+                partition_date=partition_date.isoformat(),
+                path=entry.path.as_posix(),
+            )
+
+    def _open_writer(
+        self, entry: _PartitionEntry[RepartitionableAsset], *, reopen: bool
+    ) -> tuple[IO[bytes], AvroStreamWriter]:
+        """Open (or reopen) the avro stream writer for ``entry``.
+
+        On reopen, fastavro detects a non-empty appendable file (``a+b``), re-reads the
+        container header/sync marker, and continues writing new blocks after the
+        existing ones — no header duplication.
+        """
+        mode = "a+b" if reopen else "w+b"
+        file = entry.path.open(mode)
+        try:
+            writer = self.catalog._serializer.streaming_writer(
+                file,
+                self.catalog.schema_store.get_asset_schema(entry.asset),
+                entry.asset.to_metadata(),
+            )
+        except BaseException:
+            file.close()
+            raise
+        return file, writer
+
+    def _evict_lru_if_needed(self) -> None:
+        while len(self._open_lru) >= self.max_open_writers:
+            lru_date, _ = self._open_lru.popitem(last=False)
+            self._close_partition(lru_date, evict=True)
+
+    def _get_writer(self, partition_date: datetime.datetime) -> AvroStreamWriter:
+        entry = self._partitions.get(partition_date)
+        if entry is not None and entry.open_handle is not None:
+            self._open_lru.move_to_end(partition_date)
+            return entry.open_handle[1]
+
+        self._evict_lru_if_needed()
+
+        if entry is None:
+            asset = self._create_partition_asset(partition_date)
+            # If anything between the tempfile creation and the dict insert raises
+            # (including KeyboardInterrupt/SystemExit), close the handle and unlink
+            # the path so we don't leak fds or files.
+            tmp = tempfile.NamedTemporaryFile("w+b", delete=False)  # noqa: SIM115
+            tmp_file: IO[bytes] = cast(IO[bytes], tmp)
+            path = Path(tmp.name)
+            try:
+                writer = self.catalog._serializer.streaming_writer(
+                    tmp_file, self.catalog.schema_store.get_asset_schema(asset), asset.to_metadata()
+                )
+                entry = _PartitionEntry(asset=asset, path=path, open_handle=(tmp_file, writer))
+                self._partitions[partition_date] = entry
+                self._open_lru[partition_date] = None
+            except BaseException:
+                tmp_file.close()
+                path.unlink(missing_ok=True)
+                raise
+            logger.info(
+                "Created partition tempfile.",
+                partition_date=partition_date.isoformat(),
+                path=path.as_posix(),
+            )
+            return writer
+
+        reopened_file, reopened_writer = self._open_writer(entry, reopen=True)
+        entry.open_handle = (reopened_file, reopened_writer)
+        self._open_lru[partition_date] = None
+        return reopened_writer
 
     def _write_records(self, data: Iterable[dict[str, Any]]) -> None:
         """Drain ``data`` into per-partition streaming writers (blocking)."""
@@ -610,8 +748,23 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
                     f"{self.date_attribute!r} - it is not a valid datetime."
                 )
             partition_date = truncate_datetime(timestamp, self.granularity)
-            _, __, writer = self._get_handler(partition_date)
+            writer = self._get_writer(partition_date)
             writer.write(record)
+
+    def _finalize_partitions(self) -> None:
+        """Flush + close every still-open writer so the on-disk files are complete."""
+        # Isolate per-partition flush failures so one bad writer doesn't leave
+        # the rest open; __exit__ will still run, but partitions that did flush
+        # cleanly here are upload-ready as soon as we return.
+        for partition_date in list(self._open_lru):
+            try:
+                self._close_partition(partition_date, evict=False)
+            except Exception:
+                logger.exception(
+                    "Failed to flush partition writer; remaining partitions still attempted.",
+                    partition_date=partition_date.isoformat(),
+                )
+        self._open_lru.clear()
 
     async def repartition(self, data: Iterable[dict[str, Any]] | None = None) -> None:
         """Repartition the asset.
@@ -626,11 +779,24 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
         data = data or self.catalog.retrieve_asset(self.asset)
         with self:
             await asyncio.to_thread(self._write_records, data)
+            await asyncio.to_thread(self._finalize_partitions)
             logger.info("Finished creating partitioned avro files.")
 
             async with AsyncTaskQueue[None](maxsize=5) as queue:
-                async for file, asset, writer in aiter_any(self._state.values()):
-                    logger.info("Dumping and uploading asset from temporary file.", asset=asset, path=file.name)
-                    await asyncio.to_thread(writer.dump)
-                    file.seek(0)
-                    await queue.add_task(self.catalog._resolve_storage(asset).put_async(asset.get_path(), file))
+                async for partition_date, entry in aiter_any(self._partitions.items()):
+                    logger.info(
+                        "Uploading partitioned avro file.",
+                        asset=entry.asset,
+                        path=entry.path.as_posix(),
+                        partition_date=partition_date.isoformat(),
+                    )
+                    upload_file = entry.path.open("rb")
+                    await queue.add_task(
+                        self._upload_and_close(entry.asset, upload_file),
+                    )
+
+    async def _upload_and_close(self, asset: RepartitionableAsset, file: IO[bytes]) -> None:
+        try:
+            await self.catalog._resolve_storage(asset).put_async(asset.get_path(), file)
+        finally:
+            file.close()
