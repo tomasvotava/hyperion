@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import io
 import re
 import shutil
 import tempfile
@@ -166,6 +167,7 @@ class Catalog:
     """
 
     _ASSET_TYPES: ClassVar[tuple[AssetType, ...]] = ("data_lake", "feature", "persistent_store")
+    DEFAULT_SPOOL_THRESHOLD_BYTES: ClassVar[int] = 8 * 1024 * 1024
 
     def __init__(
         self,
@@ -175,6 +177,7 @@ class Catalog:
         cache: "Cache | None" = None,
         schema_store: "SchemaStore | None" = None,
         serializer: AvroSerializer | None = None,
+        spool_threshold_bytes: int = DEFAULT_SPOOL_THRESHOLD_BYTES,
     ) -> None:
         """Initialize the catalog.
 
@@ -188,6 +191,10 @@ class Catalog:
             cache (Cache, optional): The cache to use for storing assets for quicker re-retrieval. Defaults to None.
             schema_store (SchemaStore, optional): The schema store. Defaults to ``SchemaStore.from_config()``.
             serializer (AvroSerializer, optional): The avro serializer. Defaults to a fresh ``AvroSerializer``.
+            spool_threshold_bytes (int, optional): Upper bound (inclusive) for in-memory
+                avro serialization on the store-asset path. Payloads at or below this size
+                upload from a BytesIO buffer; larger payloads are promoted to an on-disk
+                temp file. Defaults to 8 MiB.
         """
         if isinstance(storage, Mapping):
             missing = [asset_type for asset_type in self._ASSET_TYPES if asset_type not in storage]
@@ -206,6 +213,7 @@ class Catalog:
             )
 
         self.schema_store = schema_store or SchemaStore.from_config()
+        self.spool_threshold_bytes = spool_threshold_bytes
 
     def _resolve_storage(self, asset: AssetProtocol | type[AssetProtocol]) -> StoragePort:
         try:
@@ -229,26 +237,49 @@ class Catalog:
 
     def _serialize_asset_to_tempfile(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
-    ) -> Path:
-        """Serialize ``data`` for ``asset`` into a closed temp file and return its path.
+    ) -> io.BytesIO | Path:
+        """Serialize ``data`` for ``asset`` and return either an in-memory buffer or a temp-file path.
 
-        The caller owns the returned path and is responsible for deleting it.
+        Payloads up to ``spool_threshold_bytes`` are returned as an open
+        :class:`io.BytesIO` seeked to 0, so the caller can upload from RAM
+        without a disk round-trip. Larger payloads are spilled to a
+        ``NamedTemporaryFile(delete=False)`` and the :class:`~pathlib.Path` is
+        returned; the caller owns that path and must unlink it.
+
+        fastavro only requires ``seek`` / ``tell`` on the destination, which
+        BytesIO provides natively.
         """
         schema = (
             self.schema_store.get_asset_schema(asset)
             if schema_path is None
             else self.schema_store.get_schema_from_path(schema_path)
         )
+        buffer = io.BytesIO()
+        logger.info("Pouring asset into an in-memory buffer.", asset=asset)
+        self._serializer.write(buffer, schema, data, asset.to_metadata())
+        size = buffer.tell()
+        if size <= self.spool_threshold_bytes:
+            buffer.seek(0)
+            logger.info("Avro payload kept in memory.", asset=asset, size=size)
+            return buffer
         file = tempfile.NamedTemporaryFile("+wb", delete=False)  # noqa: SIM115
         path = Path(file.name)
         try:
-            logger.info("Pouring asset into a temporary file.", asset=asset, file=path.as_posix())
-            self._serializer.write(file, schema, data, asset.to_metadata())
-            logger.info("Avro file was created successfully.", path=path.as_posix(), size=file.tell())
+            logger.info(
+                "Avro payload exceeded spool threshold; spilling to disk.",
+                asset=asset,
+                size=size,
+                threshold=self.spool_threshold_bytes,
+                file=path.as_posix(),
+            )
+            buffer.seek(0)
+            shutil.copyfileobj(buffer, file)
         except BaseException:
             file.close()
             path.unlink(missing_ok=True)
             raise
+        finally:
+            buffer.close()
         file.close()
         return path
 
@@ -256,12 +287,18 @@ class Catalog:
     def _prepare_asset_storage(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
     ) -> Iterator[IO[bytes]]:
-        path = self._serialize_asset_to_tempfile(asset, data, schema_path)
+        prepared = self._serialize_asset_to_tempfile(asset, data, schema_path)
+        if isinstance(prepared, Path):
+            try:
+                with prepared.open("rb") as file:
+                    yield file
+            finally:
+                prepared.unlink(missing_ok=True)
+            return
         try:
-            with path.open("rb") as file:
-                yield file
+            yield prepared
         finally:
-            path.unlink(missing_ok=True)
+            prepared.close()
 
     async def store_asset_async(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], notify: bool = True, schema_path: str | None = None
@@ -274,12 +311,18 @@ class Catalog:
             notify (bool, optional): Whether to send a notification. Defaults to True.
         """
         logger.info("Preparing asset storage.", asset=asset)
-        prepared_path = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
-        try:
-            with prepared_path.open("rb") as file:
-                await self._resolve_storage(asset).put_async(asset.get_path(), file)
-        finally:
-            prepared_path.unlink(missing_ok=True)
+        prepared = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
+        if isinstance(prepared, Path):
+            try:
+                with prepared.open("rb") as file:
+                    await self._resolve_storage(asset).put_async(asset.get_path(), file)
+            finally:
+                prepared.unlink(missing_ok=True)
+        else:
+            try:
+                await self._resolve_storage(asset).put_async(asset.get_path(), prepared)
+            finally:
+                prepared.close()
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
 

@@ -860,3 +860,108 @@ class TestRepartitionDoesNotBlockLoop:
         ]
         assert {row["id"] for row in catalog.retrieve_asset(partitions[0])} == {"a", "b"}
         assert {row["id"] for row in catalog.retrieve_asset(partitions[1])} == {"c"}
+
+
+# -----------------------------------------------------------------------------
+# Spool-to-disk threshold (issue #201). Small payloads must round-trip through a
+# BytesIO buffer instead of NamedTemporaryFile; only oversized payloads spill to
+# disk.
+# -----------------------------------------------------------------------------
+
+
+def _spool_schema_dir(tmp_path: Path) -> Path:
+    schema_dir = tmp_path / "schemas" / "data_lake"
+    schema_dir.mkdir(parents=True)
+    schema = {"type": "record", "name": "Spool", "fields": [{"name": "id", "type": "string"}]}
+    (schema_dir / "spoolasset.v1.avro.json").write_text(json.dumps(schema))
+    return tmp_path / "schemas"
+
+
+def test_serialize_spool_small_payload_stays_in_memory(tmp_path: Path) -> None:
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    prepared = catalog._serialize_asset_to_tempfile(asset, [{"id": "tiny"}])
+    try:
+        assert isinstance(prepared, io.BytesIO)
+        assert not isinstance(prepared, Path)
+        assert prepared.tell() == 0, "buffer should be seeked to 0 ready for upload"
+        assert prepared.read(4) != b""
+    finally:
+        if isinstance(prepared, io.BytesIO):
+            prepared.close()
+
+
+def test_serialize_spool_large_payload_promotes_to_disk(tmp_path: Path) -> None:
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+        spool_threshold_bytes=512,
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    # Many records of incompressible (random-looking) ids easily clear 512 bytes
+    # even after deflate.
+    records = [{"id": f"row-{i:08d}-{uuid4().hex}"} for i in range(200)]
+    prepared = catalog._serialize_asset_to_tempfile(asset, records)
+    assert isinstance(prepared, Path)
+    try:
+        assert prepared.is_file()
+        assert prepared.stat().st_size > 512
+    finally:
+        prepared.unlink(missing_ok=True)
+
+
+async def test_serialize_spool_round_trip_small(tmp_path: Path) -> None:
+    import tempfile as _tempfile
+
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    records = [{"id": "alpha"}, {"id": "beta"}]
+    tmp_root = Path(_tempfile.gettempdir())
+    before = set(tmp_root.iterdir())
+    await catalog.store_asset_async(asset, records, notify=False)
+    # In-memory path should leave no temp-file droppings.
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(asset)) == records
+    # Sync path goes through the same in-memory branch via _prepare_asset_storage.
+    sync_asset = DataLakeAsset("spoolasset", utcnow() + datetime.timedelta(seconds=1))
+    before = set(tmp_root.iterdir())
+    catalog.store_asset(sync_asset, records, notify=False)
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(sync_asset)) == records
+
+
+async def test_serialize_spool_round_trip_large(tmp_path: Path) -> None:
+    import tempfile as _tempfile
+
+    schemas_root = _spool_schema_dir(tmp_path)
+    catalog = Catalog(
+        storage=MemoryStorage(),
+        schema_store=LocalSchemaStore(schemas_root),
+        queue=InMemoryQueue(),
+        spool_threshold_bytes=512,
+    )
+    asset = DataLakeAsset("spoolasset", utcnow())
+    records = [{"id": f"row-{i:08d}-{uuid4().hex}"} for i in range(200)]
+    tmp_root = Path(_tempfile.gettempdir())
+    before = set(tmp_root.iterdir())
+    await catalog.store_asset_async(asset, records, notify=False)
+    # On-disk path cleans up its own temp file after upload.
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(asset)) == records
+    sync_asset = DataLakeAsset("spoolasset", utcnow() + datetime.timedelta(seconds=1))
+    before = set(tmp_root.iterdir())
+    catalog.store_asset(sync_asset, records, notify=False)
+    assert set(tmp_root.iterdir()) - before == set()
+    assert list(catalog.retrieve_asset(sync_asset)) == records
