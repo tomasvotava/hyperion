@@ -17,12 +17,8 @@ from typing import IO, Literal, overload
 from hyperion.log import get_logger
 from hyperion.ports.cache import DEFAULT_TTL_SECONDS, Cache, CacheKeyOpenMode
 
-DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
-
-# Stable, namespaced default root under the system temp dir. Using a fixed
-# subdir (instead of tempfile.mkdtemp()) means default-constructed instances
-# share one reusable directory rather than leaking a fresh tmp dir each time.
 DEFAULT_LOCAL_FILE_CACHE_DIRNAME = "hyperion-cache"
+DEFAULT_LOCAL_FILE_CACHE_MAX_SIZE = 256 * (1024**2)
 
 logger = get_logger("cache")
 
@@ -40,9 +36,6 @@ class LocalFileCache(Cache):
         use_compression: bool = True,
     ) -> None:
         super().__init__(prefix, hash_keys, default_ttl)
-        # A stable namespaced dir under the system temp dir is reused across
-        # instances/processes -- unlike tempfile.mkdtemp(), which leaked a
-        # fresh, never-cleaned-up directory per default-constructed instance.
         self.root_path = root_path or (Path(tempfile.gettempdir()) / DEFAULT_LOCAL_FILE_CACHE_DIRNAME)
         if self.root_path.exists() and not self.root_path.is_dir():
             raise ValueError(f"Given local cache path ({self.root_path.as_posix()}) is not a directory.")
@@ -52,9 +45,6 @@ class LocalFileCache(Cache):
         logger.info(f"Initialized LocalFileCache in {self.root_path.as_posix()}.", root_path=self.root_path.as_posix())
         if not hash_keys:
             logger.warning("When using filesystem cache, it is recommended to hash keys.")
-        # Size enforcement is deferred to write time (see _perform_set). Doing a
-        # full O(n*log n) sorted dir scan in __init__ blocked construction for
-        # large caches.
 
     def _assert_root_path(self) -> None:
         self.root_path.mkdir(parents=True, exist_ok=True)
@@ -99,9 +89,8 @@ class LocalFileCache(Cache):
             with key_path.open("r+") as file:
                 file.seek(0)
                 yield file
-                # r+ does not truncate: a shorter rewrite ("hello" -> "hi")
-                # would otherwise leave trailing bytes ("hilo"). Truncate at
-                # the caller's final position to honour the overwrite contract.
+                # r+ does not truncate; without this a shorter rewrite leaves
+                # trailing bytes from the previous value.
                 file.truncate(file.tell())
         elif mode == "bytes":
             with key_path.open("r+b") as file:
@@ -119,7 +108,6 @@ class LocalFileCache(Cache):
             return
         total_size = self.get_total_size()
         if total_size <= self.max_size:
-            # Cheap O(n) stat sum already done; skip the O(n*log n) sort+evict.
             return
         keys_ordered = sorted(self.root_path.iterdir(), key=lambda key: key.stat().st_mtime)
         while total_size > self.max_size:
@@ -166,21 +154,16 @@ class LocalFileCache(Cache):
         content = self._compress_bytes(value) if self.use_compression else value
         tmp_path: str | None = None
         try:
-            # flush + fsync guarantee the bytes hit disk before the atomic rename.
             with tempfile.NamedTemporaryFile("wb", dir=self.root_path, delete=False) as tmp_file:
                 tmp_path = tmp_file.name
                 tmp_file.write(content)
                 tmp_file.flush()
                 os.fsync(tmp_file.fileno())
             os.replace(tmp_path, key_path)  # noqa: PTH105 - atomic same-dir replace
-            tmp_path = None  # renamed into place; nothing for the finally to clean up
+            tmp_path = None
         finally:
-            # delete=False: drop the temp file if anything before the rename is
-            # interrupted -- including BaseException (e.g. KeyboardInterrupt).
             if tmp_path is not None:
                 Path(tmp_path).unlink(missing_ok=True)
-        # Enforce the size bound lazily here (moved out of __init__ to avoid an
-        # O(n*log n) scan on construction).
         self.shrink_to_fit_max_size()
 
     def _set(self, key: str, value: str) -> None:
