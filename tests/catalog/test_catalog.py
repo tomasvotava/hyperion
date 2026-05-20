@@ -965,3 +965,193 @@ async def test_serialize_spool_round_trip_large(tmp_path: Path) -> None:
     catalog.store_asset(sync_asset, records, notify=False)
     assert set(tmp_root.iterdir()) - before == set()
     assert list(catalog.retrieve_asset(sync_asset)) == records
+
+
+class _OpenFdTracker:
+    """Counts currently-open tempfile fds that look like avro repartition tempfiles."""
+
+    @staticmethod
+    def count_open_repartition_tempfiles() -> int:
+        import tempfile as _tempfile
+
+        fd_root = Path("/proc/self/fd")
+        if not fd_root.exists():  # pragma: no cover - non-Linux
+            return -1
+        tempdir = _tempfile.gettempdir()
+        count = 0
+        for entry in fd_root.iterdir():
+            try:
+                target = entry.resolve(strict=False).as_posix()
+            except OSError:  # pragma: no cover - racing fd close
+                continue
+            if target.startswith(tempdir) and "tmp" in Path(target).name:
+                count += 1
+        return count
+
+
+class _FdRecordingStreamWriter:
+    """Wraps a real fastavro stream writer; records a max-open-fd watermark per write."""
+
+    def __init__(self, inner: AvroStreamWriter, owner: "_FdRecordingSerializer") -> None:
+        self._inner = inner
+        self._owner = owner
+
+    def write(self, record: dict[str, Any]) -> None:
+        current = _OpenFdTracker.count_open_repartition_tempfiles()
+        if current > self._owner.max_observed_open_fds:
+            self._owner.max_observed_open_fds = current
+        self._inner.write(record)
+
+    def dump(self) -> None:
+        self._inner.dump()
+
+
+class _FdRecordingSerializer(AvroSerializer):
+    """Watches how many repartition tempfiles are open during each per-record write."""
+
+    def __init__(self) -> None:
+        self.max_observed_open_fds = 0
+
+    def streaming_writer(self, fp: Any, schema: dict[str, Any], metadata: dict[str, str]) -> AvroStreamWriter:
+        return _FdRecordingStreamWriter(super().streaming_writer(fp, schema, metadata), self)
+
+
+class TestAssetRepartitionerHardening:
+    async def test_repartitioner_lru_evicts_when_over_max_open_writers(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_lru.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        serializer = _FdRecordingSerializer()
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+            serializer=serializer,
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        records = [
+            {"id": "p1-a", "timestamp": datetime.datetime(2025, 1, 1, 8, tzinfo=datetime.UTC)},
+            {"id": "p2-a", "timestamp": datetime.datetime(2025, 1, 2, 8, tzinfo=datetime.UTC)},
+            {"id": "p3-a", "timestamp": datetime.datetime(2025, 1, 3, 8, tzinfo=datetime.UTC)},
+            {"id": "p1-b", "timestamp": datetime.datetime(2025, 1, 1, 9, tzinfo=datetime.UTC)},
+            {"id": "p2-b", "timestamp": datetime.datetime(2025, 1, 2, 9, tzinfo=datetime.UTC)},
+            {"id": "p3-b", "timestamp": datetime.datetime(2025, 1, 3, 9, tzinfo=datetime.UTC)},
+        ]
+        source_asset = DataLakeAsset("repart_lru", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp", max_open_writers=2)
+        await repartitioner.repartition(records)
+
+        assert serializer.max_observed_open_fds <= 2, (
+            f"LRU bound violated: observed {serializer.max_observed_open_fds} open tempfiles"
+        )
+        partitions = sorted(catalog.iter_datalake_partitions("repart_lru"), key=lambda asset: asset.date)
+        assert len(partitions) == 3
+        ids_per_partition = [{row["id"] for row in catalog.retrieve_asset(p)} for p in partitions]
+        assert ids_per_partition == [{"p1-a", "p1-b"}, {"p2-a", "p2-b"}, {"p3-a", "p3-b"}]
+
+    def test_repartitioner_reentry_raises(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_reentry.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        asset = DataLakeAsset("repart_reentry", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+        repartitioner = AssetRepartitioner(catalog, asset, "d", "timestamp")
+
+        with repartitioner, pytest.raises(RuntimeError, match="not reentrant"):
+            repartitioner.__enter__()
+
+        # Once the context exits cleanly, a fresh `with` is allowed.
+        with repartitioner:
+            pass
+
+    def test_repartitioner_baseexception_cleanup_in_get_handler(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import tempfile as _tempfile
+
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_be.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        source_asset = DataLakeAsset("repart_be", datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp")
+
+        tmp_root = Path(_tempfile.gettempdir())
+        tempfiles_before = set(tmp_root.iterdir())
+
+        boom_calls = {"n": 0}
+        real_streaming_writer = catalog._serializer.streaming_writer
+
+        def exploding_streaming_writer(*args: Any, **kwargs: Any) -> Any:
+            boom_calls["n"] += 1
+            raise KeyboardInterrupt("simulated SIGINT after NamedTemporaryFile() and before insert")
+
+        monkeypatch.setattr(catalog._serializer, "streaming_writer", exploding_streaming_writer)
+
+        with repartitioner:
+            with pytest.raises(KeyboardInterrupt):
+                repartitioner._get_writer(datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC))
+            # Reinstate the real writer so __exit__ doesn't double-fault on already-clean state.
+            monkeypatch.setattr(catalog._serializer, "streaming_writer", real_streaming_writer)
+
+        assert boom_calls["n"] == 1
+        # No partition state was inserted, nothing to leak.
+        assert repartitioner._partitions == {}
+        assert not repartitioner._open_lru
+        leaked = set(tmp_root.iterdir()) - tempfiles_before
+        assert leaked == set(), f"BaseException path leaked tempfile(s): {leaked!r}"
+
+    async def test_repartitioner_round_trip_after_eviction(self, tmp_path: Path) -> None:
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_rt.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        records = [
+            {"id": "a1", "timestamp": datetime.datetime(2025, 1, 1, 1, tzinfo=datetime.UTC)},
+            {"id": "a2", "timestamp": datetime.datetime(2025, 1, 1, 2, tzinfo=datetime.UTC)},
+            {"id": "b1", "timestamp": datetime.datetime(2025, 1, 2, 1, tzinfo=datetime.UTC)},
+            # The next write to partition A must reopen its file after eviction by B.
+            {"id": "a3", "timestamp": datetime.datetime(2025, 1, 1, 3, tzinfo=datetime.UTC)},
+            {"id": "b2", "timestamp": datetime.datetime(2025, 1, 2, 2, tzinfo=datetime.UTC)},
+            {"id": "a4", "timestamp": datetime.datetime(2025, 1, 1, 4, tzinfo=datetime.UTC)},
+        ]
+        source_asset = DataLakeAsset("repart_rt", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp", max_open_writers=1)
+        await repartitioner.repartition(records)
+
+        partitions = sorted(catalog.iter_datalake_partitions("repart_rt"), key=lambda asset: asset.date)
+        assert [p.date for p in partitions] == [
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC),
+            datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC),
+        ]
+        a_rows = {row["id"] for row in catalog.retrieve_asset(partitions[0])}
+        b_rows = {row["id"] for row in catalog.retrieve_asset(partitions[1])}
+        assert a_rows == {"a1", "a2", "a3", "a4"}
+        assert b_rows == {"b1", "b2"}
