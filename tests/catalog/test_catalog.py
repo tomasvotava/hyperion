@@ -2,6 +2,7 @@ import datetime
 import io
 import json
 import re
+import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -887,13 +888,12 @@ def test_serialize_spool_small_payload_stays_in_memory(tmp_path: Path) -> None:
     asset = DataLakeAsset("spoolasset", utcnow())
     prepared = catalog._serialize_asset_to_tempfile(asset, [{"id": "tiny"}])
     try:
-        assert isinstance(prepared, io.BytesIO)
-        assert not isinstance(prepared, Path)
+        assert isinstance(prepared, tempfile.SpooledTemporaryFile)
+        assert prepared._rolled is False, "small payload should not roll to disk"  # type: ignore[attr-defined]
         assert prepared.tell() == 0, "buffer should be seeked to 0 ready for upload"
         assert prepared.read(4) != b""
     finally:
-        if isinstance(prepared, io.BytesIO):
-            prepared.close()
+        prepared.close()
 
 
 def test_serialize_spool_large_payload_promotes_to_disk(tmp_path: Path) -> None:
@@ -909,12 +909,14 @@ def test_serialize_spool_large_payload_promotes_to_disk(tmp_path: Path) -> None:
     # even after deflate.
     records = [{"id": f"row-{i:08d}-{uuid4().hex}"} for i in range(200)]
     prepared = catalog._serialize_asset_to_tempfile(asset, records)
-    assert isinstance(prepared, Path)
     try:
-        assert prepared.is_file()
-        assert prepared.stat().st_size > 512
+        assert isinstance(prepared, tempfile.SpooledTemporaryFile)
+        assert prepared._rolled is True, "payload over threshold should roll to disk"  # type: ignore[attr-defined]
+        prepared.seek(0, 2)
+        assert prepared.tell() > 512
+        prepared.seek(0)
     finally:
-        prepared.unlink(missing_ok=True)
+        prepared.close()
 
 
 async def test_serialize_spool_round_trip_small(tmp_path: Path) -> None:
@@ -1155,3 +1157,62 @@ class TestAssetRepartitionerHardening:
         b_rows = {row["id"] for row in catalog.retrieve_asset(partitions[1])}
         assert a_rows == {"a1", "a2", "a3", "a4"}
         assert b_rows == {"b1", "b2"}
+
+    def test_repartitioner_exit_continues_after_close_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A mid-loop close failure must not abandon the rest of the open writers."""
+        import tempfile as _tempfile
+
+        from hyperion.catalog.catalog import AssetRepartitioner
+
+        schema_dir = tmp_path / "schemas" / "data_lake"
+        schema_dir.mkdir(parents=True)
+        (schema_dir / "repart_exit.v1.avro.json").write_text(json.dumps(_TS_SCHEMA))
+
+        catalog = Catalog(
+            storage=MemoryStorage(),
+            schema_store=LocalSchemaStore(tmp_path / "schemas"),
+            queue=InMemoryQueue(),
+        )
+        day_one = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        source_asset = DataLakeAsset("repart_exit", day_one)
+
+        repartitioner = AssetRepartitioner(catalog, source_asset, "d", "timestamp")
+        partition_a = datetime.datetime(2025, 1, 1, tzinfo=datetime.UTC)
+        partition_b = datetime.datetime(2025, 1, 2, tzinfo=datetime.UTC)
+
+        # Patch dump() on the first writer encountered to raise; the second
+        # partition's writer must still be closed and its tempfile unlinked.
+        original_dump = AvroStreamWriter.dump
+        sabotaged: dict[str, bool] = {"done": False}
+
+        def maybe_exploding_dump(self: AvroStreamWriter) -> None:
+            if not sabotaged["done"]:
+                sabotaged["done"] = True
+                raise OSError("simulated disk failure during dump()")
+            original_dump(self)
+
+        monkeypatch.setattr(AvroStreamWriter, "dump", maybe_exploding_dump)
+
+        tmp_root = Path(_tempfile.gettempdir())
+        before = set(tmp_root.iterdir())
+
+        with repartitioner:
+            writer_a = repartitioner._get_writer(partition_a)
+            writer_a.write({"id": "a1", "timestamp": partition_a})
+            writer_b = repartitioner._get_writer(partition_b)
+            writer_b.write({"id": "b1", "timestamp": partition_b})
+            # _finalize_partitions would close both; but __exit__ also closes
+            # whatever is still open. Skip the finalize call so __exit__ owns
+            # both partitions and exercises the per-partition exception guard.
+            paths_in_play = [entry.path for entry in repartitioner._partitions.values()]
+
+        # __exit__ must have cleared all state and unlinked every tempfile,
+        # even though one writer.dump() raised mid-loop.
+        assert repartitioner._partitions == {}
+        assert not repartitioner._open_lru
+        leaked = set(tmp_root.iterdir()) - before
+        assert leaked == set(), f"__exit__ leaked tempfile(s) after mid-loop failure: {leaked!r}"
+        for path in paths_in_play:
+            assert not path.exists(), f"partition tempfile {path} survived __exit__"

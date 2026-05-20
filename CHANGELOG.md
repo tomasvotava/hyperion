@@ -214,9 +214,10 @@ complete. Sections accumulate here per wave.
 
 - **catalog**: keep small avro payloads in memory instead of the
   write-close-reopen disk round-trip (closes #201). New
-  `spool_threshold_bytes` Catalog kwarg (default 8 MiB); payloads at or below
-  the threshold serialize to a `BytesIO` and upload from RAM, larger payloads
-  keep the existing on-disk path.
+  `spool_threshold_bytes` Catalog kwarg (default 8 MiB); fastavro now writes
+  into a `tempfile.SpooledTemporaryFile` that stays in memory below the
+  threshold and rolls over to disk transparently during write — large
+  payloads no longer get double-buffered in RAM.
 
 ## 1.0.2 (2026-05-20)
 

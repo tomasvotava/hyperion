@@ -3,7 +3,6 @@
 import asyncio
 import dataclasses
 import datetime
-import io
 import re
 import shutil
 import tempfile
@@ -239,64 +238,38 @@ class Catalog:
 
     def _serialize_asset_to_tempfile(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
-    ) -> io.BytesIO | Path:
-        """Serialize ``data`` for ``asset`` and return either an in-memory buffer or a temp-file path.
+    ) -> tempfile.SpooledTemporaryFile[bytes]:
+        """Serialize ``data`` for ``asset`` into a spooled tempfile, seeked to 0.
 
-        Payloads up to ``spool_threshold_bytes`` are returned as an open
-        :class:`io.BytesIO` seeked to 0, so the caller can upload from RAM
-        without a disk round-trip. Larger payloads are spilled to a
-        ``NamedTemporaryFile(delete=False)`` and the :class:`~pathlib.Path` is
-        returned; the caller owns that path and must unlink it.
-
-        fastavro only requires ``seek`` / ``tell`` on the destination, which
-        BytesIO provides natively.
+        Payloads up to ``spool_threshold_bytes`` stay in memory; larger payloads
+        roll over to disk transparently *during* fastavro's write — the
+        serializer never has to fit the whole payload in RAM. The caller owns
+        the returned handle and must close it.
         """
         schema = (
             self.schema_store.get_asset_schema(asset)
             if schema_path is None
             else self.schema_store.get_schema_from_path(schema_path)
         )
-        buffer = io.BytesIO()
-        logger.info("Pouring asset into an in-memory buffer.", asset=asset)
-        self._serializer.write(buffer, schema, data, asset.to_metadata())
-        size = buffer.tell()
-        if size <= self.spool_threshold_bytes:
-            buffer.seek(0)
-            logger.info("Avro payload kept in memory.", asset=asset, size=size)
-            return buffer
-        file = tempfile.NamedTemporaryFile("+wb", delete=False)  # noqa: SIM115
-        path = Path(file.name)
+        spool: tempfile.SpooledTemporaryFile[bytes] = tempfile.SpooledTemporaryFile(  # noqa: SIM115
+            max_size=self.spool_threshold_bytes, mode="w+b"
+        )
         try:
-            logger.info(
-                "Avro payload exceeded spool threshold; spilling to disk.",
-                asset=asset,
-                size=size,
-                threshold=self.spool_threshold_bytes,
-                file=path.as_posix(),
-            )
-            buffer.seek(0)
-            shutil.copyfileobj(buffer, file)
+            logger.info("Serializing asset into spooled tempfile.", asset=asset)
+            self._serializer.write(spool, schema, data, asset.to_metadata())
         except BaseException:
-            file.close()
-            path.unlink(missing_ok=True)
+            spool.close()
             raise
-        finally:
-            buffer.close()
-        file.close()
-        return path
+        size = spool.tell()
+        spool.seek(0)
+        logger.info("Avro serialization complete.", asset=asset, size=size)
+        return spool
 
     @contextmanager
     def _prepare_asset_storage(
         self, asset: AssetProtocol, data: Iterable[dict[str, Any]], schema_path: str | None = None
     ) -> Iterator[IO[bytes]]:
         prepared = self._serialize_asset_to_tempfile(asset, data, schema_path)
-        if isinstance(prepared, Path):
-            try:
-                with prepared.open("rb") as file:
-                    yield file
-            finally:
-                prepared.unlink(missing_ok=True)
-            return
         try:
             yield prepared
         finally:
@@ -314,17 +287,10 @@ class Catalog:
         """
         logger.info("Preparing asset storage.", asset=asset)
         prepared = await asyncio.to_thread(self._serialize_asset_to_tempfile, asset, data, schema_path)
-        if isinstance(prepared, Path):
-            try:
-                with prepared.open("rb") as file:
-                    await self._resolve_storage(asset).put_async(asset.get_path(), file)
-            finally:
-                prepared.unlink(missing_ok=True)
-        else:
-            try:
-                await self._resolve_storage(asset).put_async(asset.get_path(), prepared)
-            finally:
-                prepared.close()
+        try:
+            await self._resolve_storage(asset).put_async(asset.get_path(), prepared)
+        finally:
+            prepared.close()
         if notify:
             self._notify_asset_arrival(asset, schema_path=schema_path)
 
@@ -644,11 +610,26 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
 
     def __exit__(self, *args: Any) -> None:
         try:
+            # Isolate per-partition cleanup failures so one bad writer / disk
+            # error doesn't leak the rest of the open handles or tempfiles.
             for partition_date in list(self._open_lru):
-                self._close_partition(partition_date, evict=False)
+                try:
+                    self._close_partition(partition_date, evict=False)
+                except Exception:
+                    logger.exception(
+                        "Failed to close partition writer during repartitioner exit.",
+                        partition_date=partition_date.isoformat(),
+                    )
             self._open_lru.clear()
-            for entry in self._partitions.values():
-                entry.path.unlink(missing_ok=True)
+            for partition_date, entry in self._partitions.items():
+                try:
+                    entry.path.unlink(missing_ok=True)
+                except Exception:
+                    logger.exception(
+                        "Failed to unlink partition tempfile during repartitioner exit.",
+                        partition_date=partition_date.isoformat(),
+                        path=entry.path.as_posix(),
+                    )
             self._partitions.clear()
         finally:
             self._entered = False
@@ -772,8 +753,17 @@ class AssetRepartitioner(Generic[RepartitionableAsset]):
 
     def _finalize_partitions(self) -> None:
         """Flush + close every still-open writer so the on-disk files are complete."""
+        # Isolate per-partition flush failures so one bad writer doesn't leave
+        # the rest open; __exit__ will still run, but partitions that did flush
+        # cleanly here are upload-ready as soon as we return.
         for partition_date in list(self._open_lru):
-            self._close_partition(partition_date, evict=False)
+            try:
+                self._close_partition(partition_date, evict=False)
+            except Exception:
+                logger.exception(
+                    "Failed to flush partition writer; remaining partitions still attempted.",
+                    partition_date=partition_date.isoformat(),
+                )
         self._open_lru.clear()
 
     async def repartition(self, data: Iterable[dict[str, Any]] | None = None) -> None:
