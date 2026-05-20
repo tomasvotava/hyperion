@@ -190,6 +190,19 @@ one project. Work through them in order:
   will see feature-store asset keys resolve to the corrected path (see *Catalog
   constructor change* above). Review any tooling that depended on the old path.
 
+## 1.0.2 (2026-05-20)
+
+### Fix
+
+- **catalog**: offload AssetRepartitioner.repartition fastavro work off the loop
+- **catalog**: run avro serialization off the event loop in store_asset_async
+- **storage**: don't close caller-owned streams in S3Storage.put_async
+- **cache**: make LocalFileCache write path safe and stop init leak/scan
+
+### Perf
+
+- **storage**: stream FilesystemStorage I/O instead of buffering whole files
+
 ## 1.0.1 (2026-05-19)
 
 ### Fix
