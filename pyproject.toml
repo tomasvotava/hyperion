@@ -34,7 +34,7 @@ click = ">=8.2.1,<9"
 boto3 = { version = ">=1.35.36,<2", optional = true }
 aioboto3 = { version = ">=13.2,<14", optional = true }
 polars = { version = "^1.35.0", optional = true }
-pandera = { extras = ["polars", "pandas"], version = ">=0.27,<0.32", optional = true }
+pandera = { extras = ["polars", "pandas"], version = ">=0.27,<0.33", optional = true }
 numpy = { version = ">=2.2.3,<3", optional = true }
 fastavro = { version = ">=1.10,<2", optional = true }
 googlemaps = { version = ">=4.10,<5", optional = true }
